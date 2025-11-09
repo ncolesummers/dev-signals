@@ -8,6 +8,13 @@
       "when": 1762662452737,
       "tag": "0000_glossy_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1762712340468,
+      "tag": "0001_chunky_tiger_shark",
+      "breakpoints": true
     }
   ]
 }

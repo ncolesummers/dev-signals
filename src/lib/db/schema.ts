@@ -99,6 +99,7 @@ export const ciRuns = pgTable(
     orgName: varchar("org_name", { length: 255 }).notNull(), // Azure DevOps organization
     projectName: varchar("project_name", { length: 255 }).notNull(), // Azure DevOps project
     branch: varchar("branch", { length: 255 }),
+    commitSha: varchar("commit_sha", { length: 255 }), // Git commit SHA for linking and flaky detection
 
     // PR association (nullable for non-PR runs)
     prNumber: integer("pr_number"),
@@ -113,6 +114,7 @@ export const ciRuns = pgTable(
 
     // Failure tracking
     isFlaky: boolean("is_flaky").default(false),
+    flakyTestCount: integer("flaky_test_count").default(0), // Number of flaky tests detected in this run
     failureReason: text("failure_reason"),
 
     // Additional metadata
@@ -126,6 +128,7 @@ export const ciRuns = pgTable(
     runIdIdx: index("run_id_idx").on(table.runId),
     projectNameIdxCi: index("ci_project_name_idx").on(table.projectName),
     prNumberIdx: index("ci_pr_number_idx").on(table.prNumber),
+    commitShaIdx: index("ci_commit_sha_idx").on(table.commitSha),
     statusIdx: index("status_idx").on(table.status),
     startedAtIdx: index("started_at_idx").on(table.startedAt),
     isFlakyIdx: index("is_flaky_idx").on(table.isFlaky),

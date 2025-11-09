@@ -3,6 +3,10 @@
     {
       "path": "/api/ingest/pull-requests",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/ingest/ci-runs",
+      "schedule": "0 1 * * 1"
     }
   ]
 }
