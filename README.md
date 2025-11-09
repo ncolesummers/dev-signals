@@ -35,7 +35,7 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 ### Prerequisites
 - **Bun** 1.3+ ([install](https://bun.sh))
 - **Node.js** 20+ (for tooling compatibility)
-- **Neon Postgres** account ([sign up](https://neon.tech))
+- **Supabase** account ([sign up](https://supabase.com))
 - **Azure DevOps Personal Access Token (PAT)** with appropriate permissions
 
 ### Installation
@@ -57,7 +57,7 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
    ```
 
    Edit `.env.local` and add:
-   - `DATABASE_URL` - Your Neon Postgres connection string
+   - `DATABASE_URL` - Your Supabase connection string (use Session pooler - Transaction mode)
    - `AZURE_DEVOPS_PAT` - Azure DevOps Personal Access Token
    - `AZURE_DEVOPS_ORG` - Your Azure DevOps organization name
    - (Optional) `AZURE_DEVOPS_EXCLUDE_PROJECTS` - Comma-separated list of projects to exclude
@@ -91,7 +91,7 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 | **Framework** | Next.js 16 (App Router) |
 | **Runtime** | Bun |
 | **Language** | TypeScript |
-| **Database** | Neon Postgres + Drizzle ORM |
+| **Database** | Supabase Postgres + Drizzle ORM |
 | **Styling** | Tailwind CSS v4 |
 | **Components** | shadcn/ui |
 | **Linting** | Biome |
@@ -282,7 +282,7 @@ Built with:
 - [Bun](https://bun.sh) by Jarred Sumner
 - [shadcn/ui](https://ui.shadcn.com) by shadcn
 - [Drizzle ORM](https://orm.drizzle.team) by Drizzle Team
-- [Neon](https://neon.tech) for serverless Postgres
+- [Supabase](https://supabase.com) for serverless Postgres
 
 ---
 

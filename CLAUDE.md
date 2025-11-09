@@ -47,7 +47,7 @@ curl http://localhost:3000/api/health
 - **Next.js 16** (App Router) with React Compiler enabled
 - **React 19.2.0**
 - **Bun** - Modern JavaScript runtime
-- **Neon Postgres** - Serverless PostgreSQL
+- **Supabase Postgres** - Serverless PostgreSQL
 - **Drizzle ORM** - Type-safe database queries
 - **Tailwind CSS v4**
 - **shadcn/ui** (New York variant)
@@ -123,7 +123,7 @@ src/
 Required environment variables (see `.env.example`):
 
 ```bash
-DATABASE_URL="postgresql://user:password@host.neon.tech/dbname?sslmode=require"
+DATABASE_URL="postgresql://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres"
 AZURE_DEVOPS_PAT="your_pat_here"  # Azure DevOps Personal Access Token
 AZURE_DEVOPS_ORG="your_org_name"  # Organization name (projects are autodiscovered)
 # Optional: Exclude specific projects from metrics
@@ -166,7 +166,7 @@ Understanding these choices helps explain architecture:
 - **Bun over npm**: Faster package management and test execution
 - **Biome over ESLint/Prettier**: 10-100x faster linting/formatting
 - **Drizzle over Prisma**: Lighter weight, better TypeScript inference, no code generation
-- **Neon over traditional Postgres**: Serverless, auto-scaling, no connection pooling needed
+- **Supabase over traditional Postgres**: Serverless, auto-scaling, built-in connection pooling, plus additional features like realtime subscriptions, auth, and storage if needed in the future
 - **Medians/p90 over averages**: More resilient to outliers in metrics calculations
 - **React Compiler**: Automatic memoization without manual `useMemo`/`useCallback`
 - **shadcn/ui**: Copy-paste components instead of node_modules dependency for full control

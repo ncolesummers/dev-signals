@@ -1,5 +1,5 @@
-import { Pool } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-serverless";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import * as schema from "./schema";
 
 // Validate DATABASE_URL exists
@@ -7,11 +7,12 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL environment variable is not set");
 }
 
-// Create Neon connection pool
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Create Supabase connection client
+// Note: { prepare: false } is required for Supabase's Transaction pooler mode (serverless)
+const client = postgres(process.env.DATABASE_URL, { prepare: false });
 
 // Create Drizzle client with schema
-export const db = drizzle(pool, { schema });
+export const db = drizzle(client, { schema });
 
 // Export schema for convenience
 export { schema };
