@@ -1,14 +1,31 @@
-import * as azdev from "azure-devops-node-api";
-import type { TeamProjectReference } from "azure-devops-node-api/interfaces/CoreInterfaces";
+import type * as azdev from "azure-devops-node-api";
+import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfaces";
 import {
-  type GitPullRequest,
-  type GitPullRequestCommentThread,
-  type IdentityRefWithVote,
   PullRequestStatus,
+  PullRequestTimeRangeType,
 } from "azure-devops-node-api/interfaces/GitInterfaces";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { pullRequests } from "@/lib/db/schema";
+import {
+  createAzureDevOpsConnection,
+  discoverProjects,
+  getAzureDevOpsConfig,
+  sleep,
+} from "./azure-devops-client";
+import {
+  enrichPRReviewTimestamps,
+  type TransformedPullRequest,
+  transformPullRequest,
+} from "./transformers/transform-pr";
+import type {
+  IngestionResult,
+  ProjectIngestionResult,
+  TeamProjectReference,
+} from "./types";
+
+// Re-export IngestionResult for backward compatibility
+export type { IngestionResult };
 
 /**
  * Azure DevOps PR Ingestion Module
@@ -18,102 +35,12 @@ import { pullRequests } from "@/lib/db/schema";
  * - Fetches PR data with pagination and rate limit handling
  * - Transforms ADO API data to database schema
  * - Smart merge: updates existing PRs only if source data is newer
+ *
+ * This module is now refactored to use shared utilities from:
+ * - azure-devops-client.ts: Connection, config, retry logic, rate limiting
+ * - transformers/transform-pr.ts: PR transformation and enrichment
+ * - types.ts: Shared type definitions
  */
-
-// ============================================================================
-// Type Definitions
-// ============================================================================
-
-export interface IngestionResult {
-  success: boolean;
-  projectsProcessed: number;
-  prsIngested: number;
-  prsUpdated: number;
-  prsEnriched: number;
-  prsWithReviews: number;
-  prsWithApprovals: number;
-  enrichmentErrors: number;
-  errors: Array<{ project?: string; message: string; error?: unknown }>;
-}
-
-interface ProjectIngestionResult {
-  projectName: string;
-  prsIngested: number;
-  prsUpdated: number;
-  prsEnriched: number;
-  prsWithReviews: number;
-  prsWithApprovals: number;
-  enrichmentErrors: number;
-  errors: Array<{ message: string; error?: unknown }>;
-}
-
-// ============================================================================
-// Configuration & Validation
-// ============================================================================
-
-function getAzureDevOpsConfig() {
-  const pat = process.env.AZURE_DEVOPS_PAT;
-  const org = process.env.AZURE_DEVOPS_ORG;
-
-  if (!pat) {
-    throw new Error(
-      "AZURE_DEVOPS_PAT environment variable is required for ingestion",
-    );
-  }
-
-  if (!org) {
-    throw new Error(
-      "AZURE_DEVOPS_ORG environment variable is required for ingestion",
-    );
-  }
-
-  // Parse excluded projects (comma-separated list)
-  const excludeProjects = process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS
-    ? process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS.split(",").map((p) => p.trim())
-    : [];
-
-  return { pat, org, excludeProjects };
-}
-
-// ============================================================================
-// Azure DevOps API Client
-// ============================================================================
-
-async function createAzureDevOpsConnection(
-  org: string,
-  pat: string,
-): Promise<azdev.WebApi> {
-  const authHandler = azdev.getPersonalAccessTokenHandler(pat);
-  const orgUrl = `https://dev.azure.com/${org}`;
-  return new azdev.WebApi(orgUrl, authHandler);
-}
-
-// ============================================================================
-// Project Discovery
-// ============================================================================
-
-async function discoverProjects(
-  connection: azdev.WebApi,
-  excludeProjects: string[],
-): Promise<TeamProjectReference[]> {
-  const coreApi = await connection.getCoreApi();
-  const allProjects = await coreApi.getProjects();
-
-  // Filter out excluded projects
-  const filteredProjects = allProjects.filter(
-    (project) => !excludeProjects.includes(project.name || ""),
-  );
-
-  console.log(`[Project Discovery] Found ${allProjects.length} total projects`);
-  console.log(
-    `[Project Discovery] Filtered to ${filteredProjects.length} projects (excluded: ${excludeProjects.join(", ") || "none"})`,
-  );
-  console.log(
-    `[Project Discovery] Processing projects: ${filteredProjects.map((p) => p.name).join(", ")}`,
-  );
-
-  return filteredProjects;
-}
 
 // ============================================================================
 // PR Fetching with Pagination
@@ -126,57 +53,74 @@ async function fetchAllPRsForProject(
   const gitApi = await connection.getGitApi();
   const allPRs: GitPullRequest[] = [];
 
+  // Only fetch PRs from last 90 days to limit data volume
+  const NINETY_DAYS_AGO = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
   try {
     // Get all repositories in the project
     const repos = await gitApi.getRepositories(projectName);
     console.log(
       `[${projectName}] Found ${repos.length} repositories to process`,
     );
+    console.log(
+      `[${projectName}] Fetching PRs created since ${NINETY_DAYS_AGO.toISOString().split("T")[0]} (90 days)`,
+    );
 
-    // Fetch PRs from each repository
-    for (const repo of repos) {
-      if (!repo.id || !repo.name) continue;
+    // Process repositories in parallel (10 at a time) to speed up large projects
+    const REPO_CONCURRENCY = 10;
 
-      try {
-        // Fetch PRs with pagination (Azure DevOps uses $top and $skip)
-        let skip = 0;
-        const top = 100; // Fetch 100 PRs at a time
-        let hasMore = true;
+    for (let i = 0; i < repos.length; i += REPO_CONCURRENCY) {
+      const repoBatch = repos.slice(i, i + REPO_CONCURRENCY);
 
-        while (hasMore) {
-          const prs = await gitApi.getPullRequests(
-            repo.id,
-            {
-              // Fetch all PRs (completed, active, abandoned)
-              // PullRequestStatus.All (4) includes all statuses
-              status: PullRequestStatus.All,
-            },
-            projectName,
-            top,
-            skip,
-          );
+      await Promise.all(
+        repoBatch.map(async (repo) => {
+          if (!repo.id || !repo.name) return;
 
-          if (prs.length === 0) {
-            hasMore = false;
-          } else {
-            allPRs.push(...prs);
-            skip += top;
+          try {
+            // Fetch PRs with pagination (Azure DevOps uses $top and $skip)
+            let skip = 0;
+            const top = 100; // Fetch 100 PRs at a time
+            let hasMore = true;
 
-            // Small delay to avoid rate limits
-            await sleep(100);
+            while (hasMore) {
+              const prs = await gitApi.getPullRequests(
+                repo.id,
+                {
+                  // Fetch all PRs (completed, active, abandoned)
+                  // PullRequestStatus.All (4) includes all statuses
+                  status: PullRequestStatus.All,
+                  // Only fetch PRs created in the last 90 days
+                  minTime: NINETY_DAYS_AGO,
+                  queryTimeRangeType: PullRequestTimeRangeType.Created,
+                },
+                projectName,
+                top,
+                skip,
+              );
+
+              if (prs.length === 0) {
+                hasMore = false;
+              } else {
+                allPRs.push(...prs);
+                skip += top;
+
+                // Small delay to avoid rate limits
+                await sleep(100);
+              }
+            }
+
+            console.log(
+              `[${projectName}/${repo.name}] Fetched ${allPRs.length} PRs`,
+            );
+          } catch (error) {
+            console.error(
+              `[${projectName}/${repo.name}] Error fetching PRs:`,
+              error,
+            );
+            // Continue processing other repos even if one fails
           }
-        }
-
-        console.log(
-          `[${projectName}/${repo.name}] Fetched ${allPRs.length} PRs`,
-        );
-      } catch (error) {
-        console.error(
-          `[${projectName}/${repo.name}] Error fetching PRs:`,
-          error,
-        );
-        // Continue processing other repos even if one fails
-      }
+        }),
+      );
     }
   } catch (error) {
     console.error(`[${projectName}] Error fetching repositories:`, error);
@@ -187,264 +131,11 @@ async function fetchAllPRsForProject(
 }
 
 // ============================================================================
-// Review Timestamp Enrichment (US2.1b)
-// ============================================================================
-
-/**
- * Calculate firstReviewAt from PR threads
- * Returns the earliest publishedDate from non-deleted threads with comments
- */
-export function calculateFirstReviewAt(
-  threads: GitPullRequestCommentThread[],
-): Date | null {
-  const validThreads = threads
-    .filter((thread) => {
-      // Filter out deleted threads
-      if (thread.isDeleted) return false;
-
-      // Filter out threads with no comments
-      if (!thread.comments || thread.comments.length === 0) return false;
-
-      // Must have a published date
-      if (!thread.publishedDate) return false;
-
-      return true;
-    })
-    .map((thread) => thread.publishedDate as Date)
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  return validThreads.length > 0 ? validThreads[0] : null;
-}
-
-/**
- * Calculate approvedAt from PR reviewers and threads
- * Infers approval timestamp by matching approver identity to thread authors
- *
- * Note: Azure DevOps API doesn't expose explicit vote timestamps, so we approximate
- * by finding the earliest thread created by a reviewer who has vote=10 (approved)
- */
-export function calculateApprovedAt(
-  reviewers: IdentityRefWithVote[],
-  threads: GitPullRequestCommentThread[],
-): Date | null {
-  // Find approvers (vote = 10)
-  const approvers = reviewers.filter((r) => r.vote === 10);
-
-  if (approvers.length === 0) {
-    return null;
-  }
-
-  // Find threads created by approvers
-  const approverThreads: Date[] = [];
-
-  for (const approver of approvers) {
-    for (const thread of threads) {
-      // Skip deleted threads or threads without comments
-      if (
-        thread.isDeleted ||
-        !thread.comments ||
-        thread.comments.length === 0
-      ) {
-        continue;
-      }
-
-      // Check if any comment in this thread is from the approver
-      const hasApproverComment = thread.comments.some((comment) => {
-        if (!comment.author) return false;
-
-        // Match by display name or unique name
-        return (
-          comment.author.displayName === approver.displayName ||
-          comment.author.uniqueName === approver.uniqueName ||
-          comment.author.id === approver.id
-        );
-      });
-
-      if (hasApproverComment && thread.publishedDate) {
-        approverThreads.push(thread.publishedDate);
-      }
-    }
-  }
-
-  // Return earliest thread from an approver
-  if (approverThreads.length === 0) {
-    return null;
-  }
-
-  return approverThreads.sort((a, b) => a.getTime() - b.getTime())[0];
-}
-
-/**
- * Enrich PR with review timestamps by querying Azure DevOps APIs
- * Returns firstReviewAt and approvedAt, or null if not available
- */
-async function enrichPRReviewTimestamps(
-  connection: azdev.WebApi,
-  pr: GitPullRequest,
-  projectName: string,
-): Promise<{
-  firstReviewAt: Date | null;
-  approvedAt: Date | null;
-}> {
-  try {
-    // Validate required fields
-    if (!pr.repository?.id || !pr.pullRequestId) {
-      console.warn(
-        `[Enrichment] Missing repository ID or PR ID for PR ${pr.pullRequestId}`,
-      );
-      return { firstReviewAt: null, approvedAt: null };
-    }
-
-    const gitApi = await connection.getGitApi();
-
-    // Fetch threads and reviewers in parallel
-    const [threads, reviewers] = await Promise.all([
-      gitApi.getThreads(pr.repository.id, pr.pullRequestId, projectName),
-      gitApi.getPullRequestReviewers(
-        pr.repository.id,
-        pr.pullRequestId,
-        projectName,
-      ),
-    ]);
-
-    // Calculate timestamps
-    const firstReviewAt = calculateFirstReviewAt(threads);
-    const approvedAt = calculateApprovedAt(reviewers, threads);
-
-    return { firstReviewAt, approvedAt };
-  } catch (error) {
-    // Log error but don't throw - gracefully handle enrichment failures
-    console.warn(
-      `[Enrichment] Failed to enrich PR ${pr.pullRequestId} in ${projectName}:`,
-      error instanceof Error ? error.message : error,
-    );
-    return { firstReviewAt: null, approvedAt: null };
-  }
-}
-
-// ============================================================================
-// Data Transformation
-// ============================================================================
-
-function transformPullRequest(
-  pr: GitPullRequest,
-  projectName: string,
-  orgName: string,
-): {
-  prNumber: number;
-  repoName: string;
-  orgName: string;
-  projectName: string;
-  title: string;
-  author: string;
-  state: string;
-  createdAt: Date;
-  updatedAt: Date;
-  closedAt: Date | null;
-  mergedAt: Date | null;
-  firstReviewAt: Date | null;
-  approvedAt: Date | null;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  labels: string[];
-  isDraft: boolean;
-  baseBranch: string;
-  headBranch: string | null;
-} {
-  // Extract repository name from repository object
-  const repoName = pr.repository?.name || "unknown";
-
-  // Map PR status to state
-  // Azure DevOps PullRequestStatus enum: 0=notSet, 1=active, 2=abandoned, 3=completed
-  let state = "open";
-  if (pr.status === 3) {
-    // Completed
-    state = "merged";
-  } else if (pr.status === 2) {
-    // Abandoned
-    state = "closed";
-  }
-
-  // Calculate additions and deletions (may not be available in basic API)
-  // We'll default to 0 if not available - enrichment can happen later
-  const additions = 0; // Not available in basic PR API
-  const deletions = 0; // Not available in basic PR API
-  const changedFiles = 0; // Not available in basic PR API
-
-  // Extract labels from PR (if available)
-  const labels: string[] = pr.labels?.map((label) => label.name || "") || [];
-
-  // Determine if PR is draft
-  const isDraft = pr.isDraft || false;
-
-  // Extract branch names
-  const baseBranch = pr.targetRefName?.replace("refs/heads/", "") || "main";
-  const headBranch = pr.sourceRefName?.replace("refs/heads/", "") || null;
-
-  // Map timestamps
-  const createdAt = pr.creationDate ? new Date(pr.creationDate) : new Date();
-
-  // FIX: Use creationDate as fallback instead of new Date() to avoid creating fresh timestamps
-  // This ensures the smart merge logic works correctly by comparing actual PR update times
-  const updatedAt = pr.closedDate
-    ? new Date(pr.closedDate)
-    : new Date(pr.creationDate || new Date());
-
-  const closedAt = pr.closedDate ? new Date(pr.closedDate) : null;
-
-  // Debug logging to understand what Azure DevOps API is returning
-  console.log(
-    `[Transform] PR #${pr.pullRequestId} "${pr.title?.substring(0, 50)}...":`,
-    {
-      rawStatus: pr.status,
-      mappedState: state,
-      creationDate: pr.creationDate,
-      closedDate: pr.closedDate,
-      computedUpdatedAt: updatedAt.toISOString(),
-      repo: repoName,
-      project: projectName,
-    },
-  );
-
-  // mergedAt approximation: use closedDate when status=3 (completed)
-  const mergedAt =
-    pr.status === 3 && pr.closedDate ? new Date(pr.closedDate) : null;
-
-  // Review timestamps not available in basic API (deferred to US2.1b)
-  const firstReviewAt = null;
-  const approvedAt = null;
-
-  return {
-    prNumber: pr.pullRequestId || 0,
-    repoName,
-    orgName,
-    projectName,
-    title: pr.title || "Untitled PR",
-    author: pr.createdBy?.displayName || "Unknown",
-    state,
-    createdAt,
-    updatedAt,
-    closedAt,
-    mergedAt,
-    firstReviewAt,
-    approvedAt,
-    additions,
-    deletions,
-    changedFiles,
-    labels,
-    isDraft,
-    baseBranch,
-    headBranch,
-  };
-}
-
-// ============================================================================
 // Smart Merge (Upsert with Conditional Update)
 // ============================================================================
 
 async function upsertPullRequest(
-  prData: ReturnType<typeof transformPullRequest>,
+  prData: TransformedPullRequest,
 ): Promise<"inserted" | "updated" | "skipped"> {
   try {
     // Check if PR already exists
@@ -707,12 +398,4 @@ export async function ingestPullRequests(): Promise<IngestionResult> {
   }
 
   return result;
-}
-
-// ============================================================================
-// Utilities
-// ============================================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

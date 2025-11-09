@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { ciRuns } from "@/lib/db/schema";
 import {

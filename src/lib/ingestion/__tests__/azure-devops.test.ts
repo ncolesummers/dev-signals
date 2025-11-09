@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfaces";
-import { calculateApprovedAt, calculateFirstReviewAt } from "../azure-devops";
+import {
+  calculateApprovedAt,
+  calculateFirstReviewAt,
+} from "../transformers/transform-pr";
 import {
   createPRWithApprovalButNoComment,
   createPRWithCommentsButNoApproval,

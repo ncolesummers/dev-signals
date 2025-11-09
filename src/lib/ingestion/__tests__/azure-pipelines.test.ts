@@ -1,7 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db/client";
-import { ciRuns } from "@/lib/db/schema";
+import { describe, expect, test } from "bun:test";
 import {
   createAllFailingScenario,
   createAllPassingScenario,
@@ -181,8 +178,8 @@ describe("Flaky Detection Algorithm - Scenario Tests", () => {
 
     // Verify time difference > 24 hours
     const timeDiff =
-      scenario.builds[1].startTime!.getTime() -
-      scenario.builds[0].startTime!.getTime();
+      scenario.builds[1].startTime?.getTime() -
+      scenario.builds[0].startTime?.getTime();
     const hoursDiff = timeDiff / (1000 * 60 * 60);
     expect(hoursDiff).toBeGreaterThan(24);
   });
@@ -206,12 +203,12 @@ describe("Flaky Detection - Time Window Logic", () => {
   test("should sort builds by startedAt timestamp", () => {
     const scenario = createMultipleRetryFlakyScenario();
     const sorted = scenario.builds.sort(
-      (a, b) => a.startTime!.getTime() - b.startTime!.getTime(),
+      (a, b) => a.startTime?.getTime() - b.startTime?.getTime(),
     );
 
     for (let i = 0; i < sorted.length - 1; i++) {
-      expect(sorted[i].startTime!.getTime()).toBeLessThanOrEqual(
-        sorted[i + 1].startTime!.getTime(),
+      expect(sorted[i].startTime?.getTime()).toBeLessThanOrEqual(
+        sorted[i + 1].startTime?.getTime(),
       );
     }
   });
@@ -342,7 +339,7 @@ describe("Edge Cases", () => {
 
 describe("Pagination Logic", () => {
   test("should handle empty build list", () => {
-    const builds: any[] = [];
+    const builds: unknown[] = [];
 
     expect(builds.length).toBe(0);
 

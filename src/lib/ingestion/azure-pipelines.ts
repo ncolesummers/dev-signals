@@ -1,13 +1,26 @@
-import * as azdev from "azure-devops-node-api";
-import type {
-  Build,
-  BuildResult,
-  BuildStatus,
-} from "azure-devops-node-api/interfaces/BuildInterfaces";
-import type { TeamProjectReference } from "azure-devops-node-api/interfaces/CoreInterfaces";
+import type * as azdev from "azure-devops-node-api";
+import type { Build } from "azure-devops-node-api/interfaces/BuildInterfaces";
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { ciRuns, pullRequests } from "@/lib/db/schema";
+import { ciRuns } from "@/lib/db/schema";
+import {
+  createAzureDevOpsConnection,
+  discoverProjects,
+  getAzureDevOpsConfig,
+  sleep,
+} from "./azure-devops-client";
+import {
+  type TransformedCIRun,
+  transformCIRun,
+} from "./transformers/transform-ci-run";
+import type {
+  CIIngestionResult,
+  ProjectCIIngestionResult,
+  TeamProjectReference,
+} from "./types";
+
+// Re-export CIIngestionResult for backward compatibility
+export type { CIIngestionResult };
 
 /**
  * Azure Pipelines CI Run Ingestion Module
@@ -18,102 +31,12 @@ import { ciRuns, pullRequests } from "@/lib/db/schema";
  * - Transforms Azure Pipelines Build API data to database schema
  * - Post-ingestion batch analysis for flaky test detection
  * - Separate PR linking enrichment via commit SHA
+ *
+ * This module is now refactored to use shared utilities from:
+ * - azure-devops-client.ts: Connection, config, retry logic, rate limiting
+ * - transformers/transform-ci-run.ts: CI run transformation
+ * - types.ts: Shared type definitions
  */
-
-// ============================================================================
-// Type Definitions
-// ============================================================================
-
-export interface CIIngestionResult {
-  success: boolean;
-  projectsProcessed: number;
-  runsIngested: number;
-  runsUpdated: number;
-  flakyRunsDetected: number;
-  errors: Array<{ project?: string; message: string; error?: unknown }>;
-  metrics?: Array<{
-    stepName: string;
-    startTime: number;
-    duration: number;
-    status: "success" | "error" | "timeout" | "skipped";
-    metadata?: Record<string, unknown>;
-  }>;
-}
-
-interface ProjectCIIngestionResult {
-  projectName: string;
-  runsIngested: number;
-  runsUpdated: number;
-  errors: Array<{ message: string; error?: unknown }>;
-}
-
-// ============================================================================
-// Configuration & Validation (Reuse from azure-devops.ts)
-// ============================================================================
-
-function getAzureDevOpsConfig() {
-  const pat = process.env.AZURE_DEVOPS_PAT;
-  const org = process.env.AZURE_DEVOPS_ORG;
-
-  if (!pat) {
-    throw new Error(
-      "AZURE_DEVOPS_PAT environment variable is required for ingestion",
-    );
-  }
-
-  if (!org) {
-    throw new Error(
-      "AZURE_DEVOPS_ORG environment variable is required for ingestion",
-    );
-  }
-
-  // Parse excluded projects (comma-separated list)
-  const excludeProjects = process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS
-    ? process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS.split(",").map((p) => p.trim())
-    : [];
-
-  return { pat, org, excludeProjects };
-}
-
-// ============================================================================
-// Azure DevOps API Client (Reuse from azure-devops.ts)
-// ============================================================================
-
-async function createAzureDevOpsConnection(
-  org: string,
-  pat: string,
-): Promise<azdev.WebApi> {
-  const authHandler = azdev.getPersonalAccessTokenHandler(pat);
-  const orgUrl = `https://dev.azure.com/${org}`;
-  return new azdev.WebApi(orgUrl, authHandler);
-}
-
-// ============================================================================
-// Project Discovery (Reuse from azure-devops.ts)
-// ============================================================================
-
-async function discoverProjects(
-  connection: azdev.WebApi,
-  excludeProjects: string[],
-): Promise<TeamProjectReference[]> {
-  const coreApi = await connection.getCoreApi();
-  const allProjects = await coreApi.getProjects();
-
-  // Filter out excluded projects
-  const filteredProjects = allProjects.filter(
-    (project) => !excludeProjects.includes(project.name || ""),
-  );
-
-  console.log(`[CI Discovery] Found ${allProjects.length} total projects`);
-  console.log(
-    `[CI Discovery] Filtered to ${filteredProjects.length} projects (excluded: ${excludeProjects.join(", ") || "none"})`,
-  );
-  console.log(
-    `[CI Discovery] Processing projects: ${filteredProjects.map((p) => p.name).join(", ")}`,
-  );
-
-  return filteredProjects;
-}
 
 // ============================================================================
 // CI Run Fetching with Pagination
@@ -182,7 +105,7 @@ async function fetchAllCIRunsForProject(
       // Small delay to avoid rate limits
       await sleep(100);
       batchNum++;
-    } while (true);
+    } while (builds.length === top); // Continue while we're getting full pages
 
     console.log(`[${projectName}] ✓ Fetched ${allBuilds.length} CI runs total`);
   } catch (error) {
@@ -194,128 +117,11 @@ async function fetchAllCIRunsForProject(
 }
 
 // ============================================================================
-// Data Transformation
-// ============================================================================
-
-function transformCIRun(
-  build: Build,
-  projectName: string,
-  orgName: string,
-): {
-  runId: string;
-  workflowName: string;
-  repoName: string;
-  orgName: string;
-  projectName: string;
-  branch: string | null;
-  commitSha: string | null;
-  prNumber: number | null;
-  status: string;
-  conclusion: string | null;
-  startedAt: Date;
-  completedAt: Date | null;
-  isFlaky: boolean;
-  flakyTestCount: number;
-  failureReason: string | null;
-  jobsCount: number;
-  failedJobsCount: number;
-} {
-  // Extract build ID as runId (must be unique)
-  const runId = `${projectName}-${build.id}`;
-
-  // Extract workflow/definition name
-  const workflowName = build.definition?.name || "unknown-pipeline";
-
-  // Extract repository name
-  const repoName = build.repository?.name || "unknown";
-
-  // Extract branch name
-  const branch = build.sourceBranch?.replace("refs/heads/", "") || null;
-
-  // Extract commit SHA
-  const commitSha = build.sourceVersion || null;
-
-  // PR number is not directly available in Build API - will be enriched separately
-  const prNumber = null;
-
-  // Map Build status to our schema
-  // BuildStatus: None=0, InProgress=1, Completed=2, Cancelling=4, Postponed=8, NotStarted=32, All=47
-  let status = "unknown";
-  if (build.status === 1) {
-    status = "in_progress";
-  } else if (build.status === 2) {
-    status = "completed";
-  } else if (build.status === 4) {
-    status = "cancelling";
-  }
-
-  // Map Build result to conclusion
-  // BuildResult: None=0, Succeeded=2, PartiallySucceeded=4, Failed=8, Canceled=32
-  let conclusion: string | null = null;
-  if (build.result === 2) {
-    conclusion = "success";
-  } else if (build.result === 4) {
-    conclusion = "partially_succeeded";
-  } else if (build.result === 8) {
-    conclusion = "failure";
-  } else if (build.result === 32) {
-    conclusion = "cancelled";
-  }
-
-  // Extract timestamps
-  const startedAt = build.startTime ? new Date(build.startTime) : new Date();
-  const completedAt = build.finishTime ? new Date(build.finishTime) : null;
-
-  // Failure reason (not available in basic API, could be enriched from logs)
-  const failureReason: string | null = null;
-
-  // Job counts (not available in basic Build API, would need Timeline API)
-  const jobsCount = 0;
-  const failedJobsCount = 0;
-
-  // Flaky detection happens post-ingestion, default to false
-  const isFlaky = false;
-  const flakyTestCount = 0;
-
-  // Debug logging
-  console.log(`[Transform] Build #${build.buildNumber} "${workflowName}":`, {
-    rawStatus: build.status,
-    rawResult: build.result,
-    mappedStatus: status,
-    mappedConclusion: conclusion,
-    startTime: build.startTime,
-    finishTime: build.finishTime,
-    commitSha: commitSha?.substring(0, 8),
-    project: projectName,
-  });
-
-  return {
-    runId,
-    workflowName,
-    repoName,
-    orgName,
-    projectName,
-    branch,
-    commitSha,
-    prNumber,
-    status,
-    conclusion,
-    startedAt,
-    completedAt,
-    isFlaky,
-    flakyTestCount,
-    failureReason,
-    jobsCount,
-    failedJobsCount,
-  };
-}
-
-// ============================================================================
 // Smart Merge (Upsert with Conditional Update)
 // ============================================================================
 
 async function upsertCIRun(
-  runData: ReturnType<typeof transformCIRun>,
+  runData: TransformedCIRun,
 ): Promise<"inserted" | "updated" | "skipped"> {
   try {
     // Check if CI run already exists (by unique runId)
@@ -488,7 +294,7 @@ async function detectFlakyRuns(): Promise<number> {
           runsByCommit.set(run.commitSha, []);
         }
 
-        runsByCommit.get(run.commitSha)!.push(run);
+        runsByCommit.get(run.commitSha)?.push(run);
       }
 
       console.log(
@@ -603,19 +409,11 @@ export async function enrichCIRunsWithPRLinks(): Promise<{
     for (const run of runsWithoutPR) {
       if (!run.commitSha) continue;
 
-      try {
-        // Find matching PR by commit SHA
-        // Note: This is a simplified approach - in reality, we'd need to query
-        // PR commits API to get exact commit-to-PR mapping
-        // For now, we'll skip this enrichment as it requires additional API calls
-        // and the commitSha field is sufficient for flaky detection
-      } catch (error) {
-        result.errors++;
-        console.warn(
-          `[PR Linking] Failed to enrich run ${run.runId}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
+      // Find matching PR by commit SHA
+      // Note: This is a simplified approach - in reality, we'd need to query
+      // PR commits API to get exact commit-to-PR mapping
+      // For now, we'll skip this enrichment as it requires additional API calls
+      // and the commitSha field is sufficient for flaky detection
     }
 
     console.log(
@@ -742,14 +540,6 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
 }
 
 // ============================================================================
-// Utilities
-// ============================================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ============================================================================
 // Step Tracking & Observability (WDK-compatible pattern)
 // ============================================================================
 
@@ -777,7 +567,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   timeoutError: string,
 ): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout;
+  let timeoutHandle: NodeJS.Timeout | undefined;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
@@ -787,10 +577,10 @@ async function withTimeout<T>(
 
   try {
     const result = await Promise.race([promise, timeoutPromise]);
-    clearTimeout(timeoutHandle!);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     return result;
   } catch (error) {
-    clearTimeout(timeoutHandle!);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     throw error;
   }
 }
@@ -844,7 +634,8 @@ async function trackStep<T>(
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
-    const isTimeout = error instanceof Error && error.message.includes("timed out");
+    const isTimeout =
+      error instanceof Error && error.message.includes("timed out");
 
     console.error(
       `[Step: ${name}] ✗ Failed after ${duration}ms:`,

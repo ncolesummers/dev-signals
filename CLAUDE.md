@@ -135,6 +135,51 @@ If MCP endpoint is not available:
 3. **Dashboard Layer** (`app/`): Real-time on-demand calculations for current week
 4. **Batch Processing**: Weekly aggregation on Mondays (configurable via `METRICS_CALCULATION_CRON`)
 
+### Ingestion Architecture (Refactored)
+
+The ingestion layer has been refactored for improved maintainability, testability, and resilience:
+
+**Separation of Concerns:**
+- **`azure-devops-client.ts`**: Shared utilities for all Azure DevOps integrations
+  - Environment validation with Zod schemas
+  - Connection management
+  - Project discovery
+  - Retry logic with exponential backoff (p-retry)
+  - Rate limiting (token bucket pattern, 200 req/min default)
+  - Request timeout protection
+
+- **`types.ts`**: Shared type definitions
+  - `AzureDevOpsConfig` - Configuration interface
+  - `IngestionResult` / `CIIngestionResult` - Result types
+  - `ProjectIngestionResult` / `ProjectCIIngestionResult` - Per-project results
+
+- **`transformers/`**: Data transformation modules (pure functions)
+  - `transform-pr.ts` - PR transformation and review timestamp enrichment
+  - `transform-ci-run.ts` - CI run transformation
+
+- **`azure-devops.ts`** / **`azure-pipelines.ts`**: Orchestration only
+  - Coordinate fetching, transformation, and persistence
+  - Handle pagination and batching
+  - Manage enrichment workflows
+
+**Hardening Features:**
+- **Retry Logic**: Exponential backoff with jitter (max 3 retries by default)
+  - Distinguishes retryable errors (429, 5xx, network) from non-retryable (401, 403, 404)
+- **Rate Limiting**: Token bucket pattern respects Azure DevOps 200 req/min limit
+- **Input Validation**: Zod schemas validate all environment variables on startup
+- **Configurable Timeouts**: Default 30s request timeout (configurable)
+- **Comprehensive Logging**: INFO/WARN/ERROR levels for observability
+
+**Configuration (Environment Variables):**
+```bash
+AZURE_DEVOPS_PAT="your_pat_here"                    # Required
+AZURE_DEVOPS_ORG="your_org_name"                    # Required
+AZURE_DEVOPS_EXCLUDE_PROJECTS="project1,project2"   # Optional
+AZURE_DEVOPS_REQUEST_TIMEOUT="30000"                # Optional (ms)
+AZURE_DEVOPS_MAX_RETRIES="3"                        # Optional
+AZURE_DEVOPS_RATE_LIMIT_PER_MIN="200"               # Optional
+```
+
 ### Database Schema
 
 Three core tables in `src/lib/db/schema.ts`:
@@ -169,6 +214,14 @@ src/
 │   │   ├── schema.ts     # Drizzle schema definitions
 │   │   └── client.ts     # Database connection singleton
 │   ├── ingestion/        # Azure DevOps data ingestion
+│   │   ├── azure-devops-client.ts    # Shared Azure DevOps API utilities
+│   │   │                             # (config, connection, retry, rate limiting)
+│   │   ├── types.ts                  # Shared type definitions
+│   │   ├── transformers/             # Data transformation modules
+│   │   │   ├── transform-pr.ts       # PR transformation & enrichment
+│   │   │   └── transform-ci-run.ts   # CI run transformation
+│   │   ├── azure-devops.ts           # PR ingestion orchestration
+│   │   └── azure-pipelines.ts        # CI run ingestion orchestration
 │   ├── metrics/          # Metrics calculation logic
 │   └── utils.ts          # Shared utilities (cn helper)
 └── hooks/                # Custom React hooks
