@@ -13,15 +13,31 @@ import {
 /**
  * Pull Requests table
  * Stores metadata about pull requests for tracking PR cycle time, review time, etc.
+ *
+ * AZURE DEVOPS API MAPPING:
+ * - createdAt ← creationDate (available)
+ * - closedAt ← closedDate (available)
+ * - mergedAt ← closedDate when status="completed" (approximation)
+ * - firstReviewAt ← NOT AVAILABLE in basic API (null for now, enrichment planned in US2.1b)
+ * - approvedAt ← NOT AVAILABLE in basic API (null for now, enrichment planned in US2.1b)
+ *
+ * KNOWN LIMITATIONS:
+ * - Review timestamps require Pull Request Threads API (future enrichment)
+ * - mergedAt uses closedAt as approximation (adequate for DORA lead time)
+ *
+ * MULTI-PROJECT SUPPORT:
+ * - Projects are autodiscovered from the organization via Core API
+ * - Use projectName field to filter metrics per project or aggregate across all
  */
 export const pullRequests = pgTable(
   "pull_requests",
   {
     id: serial("id").primaryKey(),
-    // GitHub PR identifiers
+    // Azure DevOps PR identifiers
     prNumber: integer("pr_number").notNull(),
     repoName: varchar("repo_name", { length: 255 }).notNull(),
-    repoOwner: varchar("repo_owner", { length: 255 }).notNull(),
+    orgName: varchar("org_name", { length: 255 }).notNull(), // Azure DevOps organization
+    projectName: varchar("project_name", { length: 255 }).notNull(), // Azure DevOps project
 
     // PR metadata
     title: text("title").notNull(),
@@ -55,6 +71,7 @@ export const pullRequests = pgTable(
   (table) => ({
     prNumberIdx: index("pr_number_idx").on(table.prNumber),
     repoNameIdx: index("repo_name_idx").on(table.repoName),
+    projectNameIdx: index("project_name_idx").on(table.projectName),
     mergedAtIdx: index("merged_at_idx").on(table.mergedAt),
     createdAtIdx: index("created_at_idx").on(table.createdAt),
   }),
@@ -63,6 +80,10 @@ export const pullRequests = pgTable(
 /**
  * CI Runs table
  * Stores CI pipeline run data for tracking flaky tests, pipeline failures, etc.
+ *
+ * AZURE DEVOPS API MAPPING:
+ * - Maps to Azure Pipelines API
+ * - Autodiscovered from all projects in organization
  */
 export const ciRuns = pgTable(
   "ci_runs",
@@ -75,7 +96,8 @@ export const ciRuns = pgTable(
 
     // Repository context
     repoName: varchar("repo_name", { length: 255 }).notNull(),
-    repoOwner: varchar("repo_owner", { length: 255 }).notNull(),
+    orgName: varchar("org_name", { length: 255 }).notNull(), // Azure DevOps organization
+    projectName: varchar("project_name", { length: 255 }).notNull(), // Azure DevOps project
     branch: varchar("branch", { length: 255 }),
 
     // PR association (nullable for non-PR runs)
@@ -102,6 +124,7 @@ export const ciRuns = pgTable(
   },
   (table) => ({
     runIdIdx: index("run_id_idx").on(table.runId),
+    projectNameIdxCi: index("ci_project_name_idx").on(table.projectName),
     prNumberIdx: index("ci_pr_number_idx").on(table.prNumber),
     statusIdx: index("status_idx").on(table.status),
     startedAtIdx: index("started_at_idx").on(table.startedAt),
@@ -112,6 +135,10 @@ export const ciRuns = pgTable(
 /**
  * Deployments table
  * Stores deployment events for DORA metrics (deployment frequency, change failure rate, MTTR)
+ *
+ * AZURE DEVOPS API MAPPING:
+ * - Maps to Azure Pipelines deployment/release events
+ * - Autodiscovered from all projects in organization
  */
 export const deployments = pgTable(
   "deployments",
@@ -124,7 +151,8 @@ export const deployments = pgTable(
 
     // Repository context
     repoName: varchar("repo_name", { length: 255 }).notNull(),
-    repoOwner: varchar("repo_owner", { length: 255 }).notNull(),
+    orgName: varchar("org_name", { length: 255 }).notNull(), // Azure DevOps organization
+    projectName: varchar("project_name", { length: 255 }).notNull(), // Azure DevOps project
 
     // Deployment details
     commitSha: varchar("commit_sha", { length: 40 }).notNull(),
@@ -154,6 +182,7 @@ export const deployments = pgTable(
   },
   (table) => ({
     deploymentIdIdx: index("deployment_id_idx").on(table.deploymentId),
+    projectNameIdxDeploy: index("deploy_project_name_idx").on(table.projectName),
     environmentIdx: index("environment_idx").on(table.environment),
     statusIdx: index("deployment_status_idx").on(table.status),
     startedAtIdx: index("deployment_started_at_idx").on(table.startedAt),

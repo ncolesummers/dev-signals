@@ -36,7 +36,7 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 - **Bun** 1.3+ ([install](https://bun.sh))
 - **Node.js** 20+ (for tooling compatibility)
 - **Neon Postgres** account ([sign up](https://neon.tech))
-- **GitHub Personal Access Token** with `repo` scope
+- **Azure DevOps Personal Access Token (PAT)** with appropriate permissions
 
 ### Installation
 
@@ -58,9 +58,11 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 
    Edit `.env.local` and add:
    - `DATABASE_URL` - Your Neon Postgres connection string
-   - `GITHUB_TOKEN` - GitHub personal access token
-   - `GITHUB_REPO_OWNER` - Your GitHub username (e.g., `ncolesummers`)
-   - `GITHUB_REPO_NAME` - Repository name (e.g., `dev-signals`)
+   - `AZURE_DEVOPS_PAT` - Azure DevOps Personal Access Token
+   - `AZURE_DEVOPS_ORG` - Your Azure DevOps organization name
+   - (Optional) `AZURE_DEVOPS_EXCLUDE_PROJECTS` - Comma-separated list of projects to exclude
+
+   **Note:** Projects are automatically discovered from your Azure DevOps organization.
 
 4. **Set up the database**
    ```bash
@@ -93,7 +95,8 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 | **Styling** | Tailwind CSS v4 |
 | **Components** | shadcn/ui |
 | **Linting** | Biome |
-| **CI/CD** | GitHub Actions |
+| **CI/CD** | GitHub Actions (this repo) |
+| **Metrics Source** | Azure DevOps (multi-project tracking) |
 | **Testing** | Vitest (unit) + Playwright (E2E) |
 
 ---
@@ -143,7 +146,7 @@ dev-signals/
 │   ├── lib/              # Utilities and business logic
 │   │   ├── db/           # Database schema & client
 │   │   ├── metrics/      # Metrics calculation functions
-│   │   └── ingestion/    # Data ingestion from GitHub
+│   │   └── ingestion/    # Data ingestion from Azure DevOps
 │   └── hooks/            # Custom React hooks
 ├── .github/
 │   ├── ISSUE_TEMPLATE/   # User story & bug report templates
@@ -179,9 +182,12 @@ bun run drizzle-kit studio
 
 ## 📋 Project Management
 
-- **GitHub Project:** [DevSignals](https://github.com/users/ncolesummers/projects/5)
+- **Codebase:** This repo is hosted on [GitHub](https://github.com/ncolesummers/dev-signals)
+- **Metrics Tracking:** Aggregates engineering metrics from Azure DevOps projects
 - **Issue Tracking:** [Issues](https://github.com/ncolesummers/dev-signals/issues)
 - **Milestones:** MVP (F1-F4), Enhancements (F5-F7)
+
+**Architecture Note:** This dashboard repo uses GitHub for code hosting and CI/CD, but tracks PR/deployment metrics from Azure DevOps organizations and projects.
 
 ### Issue Labels
 We use a comprehensive labeling system:
