@@ -31,6 +31,13 @@ export interface CIIngestionResult {
   runsUpdated: number;
   flakyRunsDetected: number;
   errors: Array<{ project?: string; message: string; error?: unknown }>;
+  metrics?: Array<{
+    stepName: string;
+    startTime: number;
+    duration: number;
+    status: "success" | "error" | "timeout" | "skipped";
+    metadata?: Record<string, unknown>;
+  }>;
 }
 
 interface ProjectCIIngestionResult {
@@ -119,27 +126,41 @@ async function fetchAllCIRunsForProject(
   const buildApi = await connection.getBuildApi();
   const allBuilds: Build[] = [];
 
+  // Only fetch builds from last 90 days to limit data volume
+  const NINETY_DAYS_AGO = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
   try {
     // Fetch builds with pagination (Azure DevOps uses $top and continuationToken)
     let continuationToken: string | undefined;
     const top = 100; // Fetch 100 builds at a time
+    let batchNum = 1;
+
+    console.log(
+      `[${projectName}] Fetching builds since ${NINETY_DAYS_AGO.toISOString().split("T")[0]} (90 days)`,
+    );
 
     do {
-      const builds = await buildApi.getBuilds(
-        projectName,
-        undefined, // definitions - undefined means all
-        undefined, // queues
-        undefined, // buildNumber
-        undefined, // minTime - could add time window filtering here
-        undefined, // maxTime
-        undefined, // requestedFor
-        undefined, // reasonFilter
-        undefined, // statusFilter - fetch all statuses
-        undefined, // resultFilter - fetch all results
-        undefined, // tagFilters
-        undefined, // properties
-        top,
-        continuationToken,
+      // Wrap each API call with timeout protection (60 seconds)
+      const builds = await trackStep(
+        `fetch-builds-${projectName}-batch-${batchNum}`,
+        () =>
+          buildApi.getBuilds(
+            projectName,
+            undefined, // definitions - undefined means all
+            undefined, // queues
+            undefined, // buildNumber
+            NINETY_DAYS_AGO, // minTime - only fetch builds from last 90 days
+            undefined, // maxTime
+            undefined, // requestedFor
+            undefined, // reasonFilter
+            undefined, // statusFilter - fetch all statuses
+            undefined, // resultFilter - fetch all results
+            undefined, // tagFilters
+            undefined, // properties
+            top,
+            continuationToken,
+          ),
+        60000, // 60 second timeout per API call
       );
 
       if (!builds || builds.length === 0) {
@@ -147,6 +168,9 @@ async function fetchAllCIRunsForProject(
       }
 
       allBuilds.push(...builds);
+      console.log(
+        `[${projectName}] Progress: Fetched ${allBuilds.length} builds so far (batch ${batchNum}: +${builds.length})`,
+      );
 
       // Check if there are more results
       // Azure DevOps Build API doesn't return a continuation token in the response
@@ -157,11 +181,12 @@ async function fetchAllCIRunsForProject(
 
       // Small delay to avoid rate limits
       await sleep(100);
+      batchNum++;
     } while (true);
 
-    console.log(`[${projectName}] Fetched ${allBuilds.length} CI runs`);
+    console.log(`[${projectName}] ✓ Fetched ${allBuilds.length} CI runs total`);
   } catch (error) {
-    console.error(`[${projectName}] Error fetching CI runs:`, error);
+    console.error(`[${projectName}] ✗ Error fetching CI runs:`, error);
     throw error;
   }
 
@@ -612,6 +637,9 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
   const startTime = Date.now();
   console.log("[CI Ingestion] Starting Azure Pipelines ingestion...");
 
+  // Clear metrics from previous run
+  stepMetrics.length = 0;
+
   const result: CIIngestionResult = {
     success: true,
     projectsProcessed: 0,
@@ -645,10 +673,11 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
 
       const batchPromises = batch.map(async (project) => {
         try {
-          const projectResult = await ingestProjectCIRuns(
-            connection,
-            project,
-            org,
+          // Wrap entire project processing with 5-minute timeout
+          const projectResult = await trackStep(
+            `ingest-project-${project.name}`,
+            () => ingestProjectCIRuns(connection, project, org),
+            300000, // 5 minute timeout per project
           );
 
           result.projectsProcessed++;
@@ -663,12 +692,20 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
             });
           }
         } catch (error) {
+          const isTimeout =
+            error instanceof Error && error.message.includes("timed out");
+
           result.errors.push({
             project: project.name || "Unknown",
-            message: "Failed to ingest project CI runs",
+            message: isTimeout
+              ? "Project ingestion timed out after 5 minutes"
+              : "Failed to ingest project CI runs",
             error,
           });
-          // Continue processing other projects
+          console.warn(
+            `[${project.name || "Unknown"}] Skipping project and continuing with others`,
+          );
+          // Continue processing other projects even if this one fails/times out
         }
       });
 
@@ -698,6 +735,9 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
     console.error("[CI Ingestion] Fatal error:", error);
   }
 
+  // Attach metrics to result for observability
+  result.metrics = stepMetrics;
+
   return result;
 }
 
@@ -707,4 +747,120 @@ export async function ingestCIRuns(): Promise<CIIngestionResult> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ============================================================================
+// Step Tracking & Observability (WDK-compatible pattern)
+// ============================================================================
+
+/**
+ * Metrics for tracking individual steps in the ingestion workflow
+ * This pattern maps 1:1 to Vercel Workflow DevKit's step.run() for future migration
+ */
+interface StepMetrics {
+  stepName: string;
+  startTime: number;
+  duration: number;
+  status: "success" | "error" | "timeout" | "skipped";
+  metadata?: Record<string, unknown>;
+}
+
+// Global metrics collection (reset per ingestion run)
+const stepMetrics: StepMetrics[] = [];
+
+/**
+ * Wrap a promise with a timeout
+ * Throws a clear timeout error if the promise doesn't resolve in time
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: string,
+): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(timeoutError));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutHandle!);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutHandle!);
+    throw error;
+  }
+}
+
+/**
+ * Track a step with metrics and optional timeout protection
+ * Pattern matches Vercel Workflow DevKit's step.run() for future migration
+ *
+ * @param name - Unique step name (e.g., "fetch-builds-Data-Layer-batch-1")
+ * @param fn - Async function to execute
+ * @param timeoutMs - Optional timeout in milliseconds (default: no timeout)
+ * @returns Result of the step function
+ */
+async function trackStep<T>(
+  name: string,
+  fn: () => Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
+  const startTime = Date.now();
+
+  try {
+    console.log(`[Step: ${name}] Starting...`);
+
+    // Execute with or without timeout
+    const result = timeoutMs
+      ? await withTimeout(
+          fn(),
+          timeoutMs,
+          `Step "${name}" timed out after ${timeoutMs}ms`,
+        )
+      : await fn();
+
+    const duration = Date.now() - startTime;
+
+    // Log slow steps as warnings
+    if (duration > 10000) {
+      console.warn(
+        `[Step: ${name}] ⚠️  Completed slowly in ${(duration / 1000).toFixed(2)}s`,
+      );
+    } else {
+      console.log(`[Step: ${name}] ✓ Completed in ${duration}ms`);
+    }
+
+    stepMetrics.push({
+      stepName: name,
+      startTime,
+      duration,
+      status: "success",
+    });
+
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    const isTimeout = error instanceof Error && error.message.includes("timed out");
+
+    console.error(
+      `[Step: ${name}] ✗ Failed after ${duration}ms:`,
+      error instanceof Error ? error.message : String(error),
+    );
+
+    stepMetrics.push({
+      stepName: name,
+      startTime,
+      duration,
+      status: isTimeout ? "timeout" : "error",
+      metadata: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+
+    throw error;
+  }
 }
