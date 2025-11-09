@@ -1,0 +1,5 @@
+[test]
+# Always enable coverage
+coverage = true
+# Set coverage threshold to 60%
+coverageThreshold = 0.6

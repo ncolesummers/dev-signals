@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/ingest/pull-requests",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

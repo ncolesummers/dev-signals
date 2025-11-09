@@ -19,7 +19,7 @@ bun build        # Build for production
 bun start        # Start production server
 bun lint         # Run Biome linter
 bun format       # Auto-format code with Biome
-bun test         # Run unit tests (Vitest)
+bun test         # Run unit tests (Bun native test runner)
 ```
 
 ### Database Commands
@@ -156,7 +156,7 @@ Enforced in CI/CD pipeline:
 
 - **Biome checks**: All code must pass `bun lint` and `bun format --check`
 - **TypeScript**: Strict mode, no type errors
-- **Test coverage**: ≥60% threshold (enforced via Vitest)
+- **Test coverage**: ≥60% threshold (enforced via Bun test runner)
 - **Accessibility**: UI components must pass axe accessibility checks
 
 ## Key Technical Decisions

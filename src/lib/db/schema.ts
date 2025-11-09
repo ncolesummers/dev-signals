@@ -182,7 +182,9 @@ export const deployments = pgTable(
   },
   (table) => ({
     deploymentIdIdx: index("deployment_id_idx").on(table.deploymentId),
-    projectNameIdxDeploy: index("deploy_project_name_idx").on(table.projectName),
+    projectNameIdxDeploy: index("deploy_project_name_idx").on(
+      table.projectName,
+    ),
     environmentIdx: index("environment_idx").on(table.environment),
     statusIdx: index("deployment_status_idx").on(table.status),
     startedAtIdx: index("deployment_started_at_idx").on(table.startedAt),

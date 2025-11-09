@@ -213,9 +213,7 @@
         "ci_runs_run_id_unique": {
           "name": "ci_runs_run_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "run_id"
-          ]
+          "columns": ["run_id"]
         }
       },
       "policies": {},
@@ -437,9 +435,7 @@
         "deployments_deployment_id_unique": {
           "name": "deployments_deployment_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "deployment_id"
-          ]
+          "columns": ["deployment_id"]
         }
       },
       "policies": {},
