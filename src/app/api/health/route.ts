@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
 
 /**
  * Health check endpoint
@@ -7,11 +7,11 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   return NextResponse.json(
     {
-      status: 'ok',
+      status: "ok",
       timestamp: new Date().toISOString(),
-      service: 'DevSignals',
-      version: '1.0.0',
+      service: "DevSignals",
+      version: "1.0.0",
     },
-    { status: 200 }
+    { status: 200 },
   );
 }
