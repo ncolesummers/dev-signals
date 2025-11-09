@@ -1,0 +1,97 @@
+name: User Story
+description: Create a new user story for a feature or enhancement
+title: "[Story] "
+labels: ["story"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## User Story Template
+        Use this template to create well-defined user stories with clear acceptance criteria.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Brief one-line summary of this user story
+      placeholder: "As a [user], I want to [action] so that [benefit]"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this story solve? Why is it needed?
+      placeholder: |
+        Describe the problem or need this story addresses.
+        Include context about the current state and why this is important.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Clear, testable criteria that define when this story is complete
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
+      value: |
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_plan
+    attributes:
+      label: Functional Test Plan
+      description: How will this story be tested? Include manual and automated test scenarios
+      placeholder: |
+        **Manual Testing:**
+        1. Step 1
+        2. Step 2
+        3. Expected result
+
+        **Automated Tests:**
+        - Unit tests for X
+        - Integration tests for Y
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: What is the priority of this story?
+      options:
+        - P0 - Critical
+        - P1 - High
+        - P2 - Medium
+      default: 2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size Estimate
+      description: Estimated effort to complete this story
+      options:
+        - S - Small (1-2 days)
+        - M - Medium (3-5 days)
+        - L - Large (5+ days)
+      default: 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: Any additional context, dependencies, or technical notes
+      placeholder: |
+        - Dependencies: Issue #123
+        - Related to: Feature X
+        - Technical notes: Consider using library Y

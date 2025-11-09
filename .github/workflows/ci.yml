@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run Biome lint
+        run: bun run lint
+
+      - name: Run Biome format check
+        run: bun run format --check
+
+      - name: Type check
+        run: bunx tsc --noEmit
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run unit tests
+        run: bun test
+        env:
+          # Mock DATABASE_URL for tests
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+
+      # Coverage check (60% threshold) - will be implemented in US7.1
+      # - name: Check coverage threshold
+      #   run: bun test --coverage --coverage-threshold=60
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build application
+        run: bun run build
+        env:
+          # Mock DATABASE_URL for build
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+
+  e2e:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Playwright setup - will be implemented in US7.2
+      # - name: Install Playwright browsers
+      #   run: bunx playwright install --with-deps
+
+      # - name: Run Playwright tests
+      #   run: bunx playwright test
+      #   env:
+      #     DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+
+      # Placeholder for now - just verify health endpoint works
+      - name: Build and start dev server
+        run: |
+          bun run build
+          bun run start &
+          sleep 5
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+
+      - name: Smoke test - health endpoint
+        run: |
+          curl -f http://localhost:3000/api/health || exit 1
