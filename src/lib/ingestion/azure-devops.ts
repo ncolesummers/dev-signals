@@ -469,9 +469,14 @@ async function upsertPullRequest(
     // PR exists - check if we should update
     const existingPR = existing[0];
 
-    // Smart merge: only update if source data is newer
-    // Compare updatedAt timestamps
-    if (prData.updatedAt > existingPR.updatedAt) {
+    // Smart merge: update if:
+    // 1. Source data is newer (updatedAt timestamp changed), OR
+    // 2. We're enriching with new review timestamps that were previously null
+    const hasNewEnrichmentData =
+      (prData.firstReviewAt !== null && existingPR.firstReviewAt === null) ||
+      (prData.approvedAt !== null && existingPR.approvedAt === null);
+
+    if (prData.updatedAt > existingPR.updatedAt || hasNewEnrichmentData) {
       await db
         .update(pullRequests)
         .set(prData)
@@ -633,34 +638,49 @@ export async function ingestPullRequests(): Promise<IngestionResult> {
     // Discover projects
     const projects = await discoverProjects(connection, excludeProjects);
 
-    // Process each project
-    for (const project of projects) {
-      try {
-        const projectResult = await ingestProjectPRs(connection, project, org);
+    // Process projects in parallel (3 at a time) for better performance
+    // This provides ~3x speedup while respecting Azure DevOps API rate limits
+    const PROJECT_CONCURRENCY = 3;
 
-        result.projectsProcessed++;
-        result.prsIngested += projectResult.prsIngested;
-        result.prsUpdated += projectResult.prsUpdated;
-        result.prsEnriched += projectResult.prsEnriched;
-        result.prsWithReviews += projectResult.prsWithReviews;
-        result.prsWithApprovals += projectResult.prsWithApprovals;
-        result.enrichmentErrors += projectResult.enrichmentErrors;
+    // Process projects in batches
+    for (let i = 0; i < projects.length; i += PROJECT_CONCURRENCY) {
+      const batch = projects.slice(i, i + PROJECT_CONCURRENCY);
 
-        // Add project-specific errors to overall errors
-        for (const error of projectResult.errors) {
+      const batchPromises = batch.map(async (project) => {
+        try {
+          const projectResult = await ingestProjectPRs(
+            connection,
+            project,
+            org,
+          );
+
+          result.projectsProcessed++;
+          result.prsIngested += projectResult.prsIngested;
+          result.prsUpdated += projectResult.prsUpdated;
+          result.prsEnriched += projectResult.prsEnriched;
+          result.prsWithReviews += projectResult.prsWithReviews;
+          result.prsWithApprovals += projectResult.prsWithApprovals;
+          result.enrichmentErrors += projectResult.enrichmentErrors;
+
+          // Add project-specific errors to overall errors
+          for (const error of projectResult.errors) {
+            result.errors.push({
+              project: projectResult.projectName,
+              ...error,
+            });
+          }
+        } catch (error) {
           result.errors.push({
-            project: projectResult.projectName,
-            ...error,
+            project: project.name || "Unknown",
+            message: "Failed to ingest project",
+            error,
           });
+          // Continue processing other projects
         }
-      } catch (error) {
-        result.errors.push({
-          project: project.name || "Unknown",
-          message: "Failed to ingest project",
-          error,
-        });
-        // Continue processing other projects
-      }
+      });
+
+      // Wait for current batch to complete before starting next batch
+      await Promise.allSettled(batchPromises);
     }
 
     // Determine overall success

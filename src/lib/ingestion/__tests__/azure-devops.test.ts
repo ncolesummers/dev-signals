@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfaces";
+import { calculateApprovedAt, calculateFirstReviewAt } from "../azure-devops";
+import {
+  createPRWithApprovalButNoComment,
+  createPRWithCommentsButNoApproval,
+  createPRWithDeletedThreads,
+  createPRWithEmptyThreads,
+  createPRWithMultipleReviewers,
+  createPRWithNoReviews,
+  createPRWithRejection,
+  createPRWithSingleReview,
+} from "./fixtures/azure-devops-api-responses";
 
 /**
  * Unit tests for Azure DevOps PR ingestion module
@@ -10,6 +21,7 @@ import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfa
  * - PR data transformation from ADO API to DB schema
  * - Smart merge logic (insert/update/skip)
  * - Error handling and logging
+ * - PR review timestamp enrichment (US2.1b)
  *
  * Uses Bun native test runner (Jest-compatible API)
  */
@@ -384,3 +396,208 @@ function transformPRForTest(
     headBranch,
   };
 }
+
+// ============================================================================
+// Review Timestamp Enrichment Tests (US2.1b)
+// ============================================================================
+
+describe("calculateFirstReviewAt()", () => {
+  test("should return earliest thread published date from valid threads", () => {
+    const scenario = createPRWithSingleReview();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toEqual(scenario.expectedFirstReview);
+  });
+
+  test("should return earliest thread when multiple reviewers comment at different times", () => {
+    const scenario = createPRWithMultipleReviewers();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toEqual(scenario.expectedFirstReview);
+  });
+
+  test("should return null when no threads exist", () => {
+    const scenario = createPRWithNoReviews();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toBeNull();
+  });
+
+  test("should ignore deleted threads when calculating first review", () => {
+    const scenario = createPRWithDeletedThreads();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toEqual(scenario.expectedFirstReview);
+  });
+
+  test("should ignore empty threads (no comments)", () => {
+    const scenario = createPRWithEmptyThreads();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toEqual(scenario.expectedFirstReview);
+  });
+
+  test("should handle threads without publishedDate", () => {
+    const scenario = createPRWithSingleReview();
+    // Remove publishedDate from all threads
+    const threadsWithoutDate = scenario.threads.map((thread) => ({
+      ...thread,
+      publishedDate: undefined,
+    }));
+
+    const result = calculateFirstReviewAt(threadsWithoutDate);
+
+    expect(result).toBeNull();
+  });
+
+  test("should return date instance, not string", () => {
+    const scenario = createPRWithSingleReview();
+
+    const result = calculateFirstReviewAt(scenario.threads);
+
+    expect(result).toBeInstanceOf(Date);
+  });
+});
+
+describe("calculateApprovedAt()", () => {
+  test("should return approval timestamp when approver has matching thread", () => {
+    const scenario = createPRWithSingleReview();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toEqual(scenario.expectedApproval);
+  });
+
+  test("should return earliest approval when multiple approvers comment", () => {
+    const scenario = createPRWithMultipleReviewers();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toEqual(scenario.expectedApproval);
+  });
+
+  test("should return null when no approvers exist (vote !== 10)", () => {
+    const scenario = createPRWithCommentsButNoApproval();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toBeNull();
+  });
+
+  test("should return null when approver has no matching threads", () => {
+    const scenario = createPRWithApprovalButNoComment();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toBeNull();
+  });
+
+  test("should return null when reviewer rejected (vote = -10)", () => {
+    const scenario = createPRWithRejection();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toBeNull();
+  });
+
+  test("should ignore deleted threads when matching approvers", () => {
+    const scenario = createPRWithDeletedThreads();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    // Should still find the approval from the active thread
+    expect(result).toEqual(scenario.expectedApproval);
+  });
+
+  test("should ignore empty threads when matching approvers", () => {
+    const scenario = createPRWithEmptyThreads();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toEqual(scenario.expectedApproval);
+  });
+
+  test("should match approver by displayName", () => {
+    const scenario = createPRWithSingleReview();
+
+    // Ensure matching by displayName works
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).not.toBeNull();
+  });
+
+  test("should match approver by uniqueName", () => {
+    const scenario = createPRWithSingleReview();
+
+    // Modify thread to match by uniqueName instead of displayName
+    const modifiedThreads = scenario.threads.map((thread) => ({
+      ...thread,
+      comments: thread.comments?.map((comment) => ({
+        ...comment,
+        author: {
+          ...comment.author,
+          displayName: "Different Name", // Won't match
+          uniqueName: scenario.reviewers[0].uniqueName, // Will match
+        },
+      })),
+    }));
+
+    const result = calculateApprovedAt(scenario.reviewers, modifiedThreads);
+
+    expect(result).not.toBeNull();
+  });
+
+  test("should match approver by id", () => {
+    const scenario = createPRWithSingleReview();
+
+    // Modify thread to match by id instead
+    const modifiedThreads = scenario.threads.map((thread) => ({
+      ...thread,
+      comments: thread.comments?.map((comment) => ({
+        ...comment,
+        author: {
+          displayName: "Different Name",
+          uniqueName: "different@email.com",
+          id: scenario.reviewers[0].id, // Will match by ID
+        },
+      })),
+    }));
+
+    const result = calculateApprovedAt(scenario.reviewers, modifiedThreads);
+
+    expect(result).not.toBeNull();
+  });
+
+  test("should return date instance, not string", () => {
+    const scenario = createPRWithSingleReview();
+
+    const result = calculateApprovedAt(scenario.reviewers, scenario.threads);
+
+    expect(result).toBeInstanceOf(Date);
+  });
+
+  test("should handle threads without author information", () => {
+    const scenario = createPRWithSingleReview();
+
+    // Remove author from comments
+    const threadsWithoutAuthor = scenario.threads.map((thread) => ({
+      ...thread,
+      comments: thread.comments?.map((comment) => ({
+        ...comment,
+        author: undefined,
+      })),
+    }));
+
+    const result = calculateApprovedAt(
+      scenario.reviewers,
+      threadsWithoutAuthor,
+    );
+
+    expect(result).toBeNull();
+  });
+});
