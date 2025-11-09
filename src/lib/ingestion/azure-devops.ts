@@ -2,6 +2,8 @@ import * as azdev from "azure-devops-node-api";
 import type { TeamProjectReference } from "azure-devops-node-api/interfaces/CoreInterfaces";
 import {
   type GitPullRequest,
+  type GitPullRequestCommentThread,
+  type IdentityRefWithVote,
   PullRequestStatus,
 } from "azure-devops-node-api/interfaces/GitInterfaces";
 import { and, eq } from "drizzle-orm";
@@ -27,6 +29,10 @@ export interface IngestionResult {
   projectsProcessed: number;
   prsIngested: number;
   prsUpdated: number;
+  prsEnriched: number;
+  prsWithReviews: number;
+  prsWithApprovals: number;
+  enrichmentErrors: number;
   errors: Array<{ project?: string; message: string; error?: unknown }>;
 }
 
@@ -34,6 +40,10 @@ interface ProjectIngestionResult {
   projectName: string;
   prsIngested: number;
   prsUpdated: number;
+  prsEnriched: number;
+  prsWithReviews: number;
+  prsWithApprovals: number;
+  enrichmentErrors: number;
   errors: Array<{ message: string; error?: unknown }>;
 }
 
@@ -174,6 +184,142 @@ async function fetchAllPRsForProject(
   }
 
   return allPRs;
+}
+
+// ============================================================================
+// Review Timestamp Enrichment (US2.1b)
+// ============================================================================
+
+/**
+ * Calculate firstReviewAt from PR threads
+ * Returns the earliest publishedDate from non-deleted threads with comments
+ */
+export function calculateFirstReviewAt(
+  threads: GitPullRequestCommentThread[],
+): Date | null {
+  const validThreads = threads
+    .filter((thread) => {
+      // Filter out deleted threads
+      if (thread.isDeleted) return false;
+
+      // Filter out threads with no comments
+      if (!thread.comments || thread.comments.length === 0) return false;
+
+      // Must have a published date
+      if (!thread.publishedDate) return false;
+
+      return true;
+    })
+    .map((thread) => thread.publishedDate as Date)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  return validThreads.length > 0 ? validThreads[0] : null;
+}
+
+/**
+ * Calculate approvedAt from PR reviewers and threads
+ * Infers approval timestamp by matching approver identity to thread authors
+ *
+ * Note: Azure DevOps API doesn't expose explicit vote timestamps, so we approximate
+ * by finding the earliest thread created by a reviewer who has vote=10 (approved)
+ */
+export function calculateApprovedAt(
+  reviewers: IdentityRefWithVote[],
+  threads: GitPullRequestCommentThread[],
+): Date | null {
+  // Find approvers (vote = 10)
+  const approvers = reviewers.filter((r) => r.vote === 10);
+
+  if (approvers.length === 0) {
+    return null;
+  }
+
+  // Find threads created by approvers
+  const approverThreads: Date[] = [];
+
+  for (const approver of approvers) {
+    for (const thread of threads) {
+      // Skip deleted threads or threads without comments
+      if (
+        thread.isDeleted ||
+        !thread.comments ||
+        thread.comments.length === 0
+      ) {
+        continue;
+      }
+
+      // Check if any comment in this thread is from the approver
+      const hasApproverComment = thread.comments.some((comment) => {
+        if (!comment.author) return false;
+
+        // Match by display name or unique name
+        return (
+          comment.author.displayName === approver.displayName ||
+          comment.author.uniqueName === approver.uniqueName ||
+          comment.author.id === approver.id
+        );
+      });
+
+      if (hasApproverComment && thread.publishedDate) {
+        approverThreads.push(thread.publishedDate);
+      }
+    }
+  }
+
+  // Return earliest thread from an approver
+  if (approverThreads.length === 0) {
+    return null;
+  }
+
+  return approverThreads.sort((a, b) => a.getTime() - b.getTime())[0];
+}
+
+/**
+ * Enrich PR with review timestamps by querying Azure DevOps APIs
+ * Returns firstReviewAt and approvedAt, or null if not available
+ */
+async function enrichPRReviewTimestamps(
+  connection: azdev.WebApi,
+  pr: GitPullRequest,
+  projectName: string,
+): Promise<{
+  firstReviewAt: Date | null;
+  approvedAt: Date | null;
+}> {
+  try {
+    // Validate required fields
+    if (!pr.repository?.id || !pr.pullRequestId) {
+      console.warn(
+        `[Enrichment] Missing repository ID or PR ID for PR ${pr.pullRequestId}`,
+      );
+      return { firstReviewAt: null, approvedAt: null };
+    }
+
+    const gitApi = await connection.getGitApi();
+
+    // Fetch threads and reviewers in parallel
+    const [threads, reviewers] = await Promise.all([
+      gitApi.getThreads(pr.repository.id, pr.pullRequestId, projectName),
+      gitApi.getPullRequestReviewers(
+        pr.repository.id,
+        pr.pullRequestId,
+        projectName,
+      ),
+    ]);
+
+    // Calculate timestamps
+    const firstReviewAt = calculateFirstReviewAt(threads);
+    const approvedAt = calculateApprovedAt(reviewers, threads);
+
+    return { firstReviewAt, approvedAt };
+  } catch (error) {
+    // Log error but don't throw - gracefully handle enrichment failures
+    console.warn(
+      `[Enrichment] Failed to enrich PR ${pr.pullRequestId} in ${projectName}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return { firstReviewAt: null, approvedAt: null };
+  }
 }
 
 // ============================================================================
@@ -363,6 +509,10 @@ async function ingestProjectPRs(
     projectName,
     prsIngested: 0,
     prsUpdated: 0,
+    prsEnriched: 0,
+    prsWithReviews: 0,
+    prsWithApprovals: 0,
+    enrichmentErrors: 0,
     errors: [],
   };
 
@@ -379,6 +529,45 @@ async function ingestProjectPRs(
       try {
         // Transform PR data
         const prData = transformPullRequest(pr, projectName, orgName);
+
+        // Enrich with review timestamps
+        try {
+          const reviewTimestamps = await enrichPRReviewTimestamps(
+            connection,
+            pr,
+            projectName,
+          );
+
+          prData.firstReviewAt = reviewTimestamps.firstReviewAt;
+          prData.approvedAt = reviewTimestamps.approvedAt;
+
+          // Track enrichment statistics
+          if (
+            reviewTimestamps.firstReviewAt !== null ||
+            reviewTimestamps.approvedAt !== null
+          ) {
+            result.prsEnriched++;
+          }
+
+          if (reviewTimestamps.firstReviewAt !== null) {
+            result.prsWithReviews++;
+          }
+
+          if (reviewTimestamps.approvedAt !== null) {
+            result.prsWithApprovals++;
+          }
+
+          // Small delay to avoid rate limits (2 additional API calls per PR)
+          await sleep(100);
+        } catch (error) {
+          // Log warning but continue - enrichment failure shouldn't block ingestion
+          result.enrichmentErrors++;
+          console.warn(
+            `[${projectName}] Failed to enrich PR ${pr.pullRequestId}:`,
+            error instanceof Error ? error.message : error,
+          );
+          // Keep timestamps as null (already set in transformPullRequest)
+        }
 
         // Upsert to database
         const action = await upsertPullRequest(prData);
@@ -397,7 +586,7 @@ async function ingestProjectPRs(
     }
 
     console.log(
-      `[${projectName}] Completed: ${result.prsIngested} inserted, ${result.prsUpdated} updated, ${result.errors.length} errors`,
+      `[${projectName}] Completed: ${result.prsIngested} inserted, ${result.prsUpdated} updated, ${result.prsEnriched} enriched (${result.prsWithReviews} with reviews, ${result.prsWithApprovals} with approvals), ${result.enrichmentErrors} enrichment errors, ${result.errors.length} errors`,
     );
   } catch (error) {
     result.errors.push({
@@ -422,6 +611,10 @@ export async function ingestPullRequests(): Promise<IngestionResult> {
     projectsProcessed: 0,
     prsIngested: 0,
     prsUpdated: 0,
+    prsEnriched: 0,
+    prsWithReviews: 0,
+    prsWithApprovals: 0,
+    enrichmentErrors: 0,
     errors: [],
   };
 
@@ -448,6 +641,10 @@ export async function ingestPullRequests(): Promise<IngestionResult> {
         result.projectsProcessed++;
         result.prsIngested += projectResult.prsIngested;
         result.prsUpdated += projectResult.prsUpdated;
+        result.prsEnriched += projectResult.prsEnriched;
+        result.prsWithReviews += projectResult.prsWithReviews;
+        result.prsWithApprovals += projectResult.prsWithApprovals;
+        result.enrichmentErrors += projectResult.enrichmentErrors;
 
         // Add project-specific errors to overall errors
         for (const error of projectResult.errors) {
@@ -470,8 +667,15 @@ export async function ingestPullRequests(): Promise<IngestionResult> {
     result.success = result.errors.length === 0;
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    const enrichmentRate =
+      result.prsIngested + result.prsUpdated > 0
+        ? (
+            (result.prsEnriched / (result.prsIngested + result.prsUpdated)) *
+            100
+          ).toFixed(1)
+        : "0.0";
     console.log(
-      `[Ingestion] Completed in ${duration}s: ${result.projectsProcessed} projects, ${result.prsIngested} inserted, ${result.prsUpdated} updated, ${result.errors.length} errors`,
+      `[Ingestion] Completed in ${duration}s: ${result.projectsProcessed} projects, ${result.prsIngested} inserted, ${result.prsUpdated} updated, ${result.prsEnriched} enriched (${enrichmentRate}% - ${result.prsWithReviews} with reviews, ${result.prsWithApprovals} with approvals), ${result.enrichmentErrors} enrichment errors, ${result.errors.length} errors`,
     );
   } catch (error) {
     result.success = false;
