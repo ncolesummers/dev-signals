@@ -113,8 +113,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should return 400 when required field 'environment' is missing", async () => {
-      const invalidData = { ...validDeployment };
-      delete (invalidData as any).environment;
+      const invalidData: Partial<typeof validDeployment> = {
+        ...validDeployment,
+      };
+      delete invalidData.environment;
 
       const response = await fetch(API_URL, {
         method: "POST",
@@ -225,8 +227,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should return 400 when 'projectName' is missing", async () => {
-      const invalidData = { ...validDeployment };
-      delete (invalidData as any).projectName;
+      const invalidData: Partial<typeof validDeployment> = {
+        ...validDeployment,
+      };
+      delete invalidData.projectName;
 
       const response = await fetch(API_URL, {
         method: "POST",
