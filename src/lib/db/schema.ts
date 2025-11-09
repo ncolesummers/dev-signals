@@ -153,13 +153,14 @@ export const deployments = pgTable(
     environment: varchar("environment", { length: 100 }).notNull(), // production, staging, etc.
 
     // Repository context
-    repoName: varchar("repo_name", { length: 255 }).notNull(),
+    repoName: varchar("repo_name", { length: 255 }), // Nullable for manual deployments
     orgName: varchar("org_name", { length: 255 }).notNull(), // Azure DevOps organization
     projectName: varchar("project_name", { length: 255 }).notNull(), // Azure DevOps project
 
     // Deployment details
     commitSha: varchar("commit_sha", { length: 40 }).notNull(),
     deployedBy: varchar("deployed_by", { length: 255 }),
+    notes: text("notes"), // Optional notes for manual deployments (incidents, context, etc.)
 
     // Status
     status: varchar("status", { length: 50 }).notNull(), // success, failure, in_progress, rolled_back

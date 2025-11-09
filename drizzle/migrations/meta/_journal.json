@@ -15,6 +15,13 @@
       "when": 1762712340468,
       "tag": "0001_chunky_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1762725531825,
+      "tag": "0002_known_bastion",
+      "breakpoints": true
     }
   ]
 }
