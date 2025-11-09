@@ -1,6 +1,9 @@
 import * as azdev from "azure-devops-node-api";
 import type { TeamProjectReference } from "azure-devops-node-api/interfaces/CoreInterfaces";
-import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfaces";
+import {
+  PullRequestStatus,
+  type GitPullRequest,
+} from "azure-devops-node-api/interfaces/GitInterfaces";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { pullRequests } from "@/lib/db/schema";
@@ -135,7 +138,8 @@ async function fetchAllPRsForProject(
             repo.id,
             {
               // Fetch all PRs (completed, active, abandoned)
-              status: undefined,
+              // PullRequestStatus.All (4) includes all statuses
+              status: PullRequestStatus.All,
             },
             projectName,
             top,
@@ -234,8 +238,28 @@ function transformPullRequest(
 
   // Map timestamps
   const createdAt = pr.creationDate ? new Date(pr.creationDate) : new Date();
-  const updatedAt = pr.closedDate ? new Date(pr.closedDate) : new Date(); // Use closedDate as updatedAt approximation
+
+  // FIX: Use creationDate as fallback instead of new Date() to avoid creating fresh timestamps
+  // This ensures the smart merge logic works correctly by comparing actual PR update times
+  const updatedAt = pr.closedDate
+    ? new Date(pr.closedDate)
+    : new Date(pr.creationDate || new Date());
+
   const closedAt = pr.closedDate ? new Date(pr.closedDate) : null;
+
+  // Debug logging to understand what Azure DevOps API is returning
+  console.log(
+    `[Transform] PR #${pr.pullRequestId} "${pr.title?.substring(0, 50)}...":`,
+    {
+      rawStatus: pr.status,
+      mappedState: state,
+      creationDate: pr.creationDate,
+      closedDate: pr.closedDate,
+      computedUpdatedAt: updatedAt.toISOString(),
+      repo: repoName,
+      project: projectName,
+    },
+  );
 
   // mergedAt approximation: use closedDate when status=3 (completed)
   const mergedAt =
