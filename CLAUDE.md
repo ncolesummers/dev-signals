@@ -42,6 +42,80 @@ bunx playwright test --ui      # Run E2E tests in UI mode
 curl http://localhost:3000/api/health
 ```
 
+## Debugging & Troubleshooting with Next.js MCP
+
+**CRITICAL**: This project uses Next.js 16, which includes built-in MCP (Model Context Protocol) support for real-time diagnostics. The `next-devtools-mcp` server is THE PRIMARY TOOL for troubleshooting running Next.js applications and should ALWAYS be used before manual file inspection or curl-based testing.
+
+### Why MCP is Essential
+
+- **Real-time error detection**: Access build errors, runtime errors, and TypeScript errors directly from the running dev server
+- **Live application state**: Query routes, components, server actions, and configuration without reading files
+- **Browser-level testing**: Execute JavaScript in actual browser context (not just HTTP requests)
+- **Context-aware debugging**: Understand your app's runtime state, not just its source code
+
+### Quick Start
+
+1. **Always start with `init`**: Call the `mcp__next-devtools__init` tool at the beginning of ANY Next.js debugging session
+   ```
+   This establishes documentation requirements and sets up proper context
+   ```
+
+2. **Start your dev server**: Run `bun dev` to start Next.js with MCP enabled at `http://localhost:3000/_next/mcp`
+
+3. **Query runtime state**: Use `mcp__next-devtools__nextjs_runtime` to access live diagnostics
+   - `action='discover_servers'`: Find all running Next.js dev servers (auto-discovery on ports 3000, 3001, etc.)
+   - `action='list_tools'`: See all available runtime diagnostic tools
+   - `action='call_tool'`: Execute specific tools (e.g., `get_errors`, `get_logs`, `get_project_metadata`)
+
+### Available MCP Tools
+
+| Tool | When to Use |
+|------|-------------|
+| `nextjs_runtime` | **PRIMARY TOOL** - Always use FIRST for any Next.js debugging, error investigation, or state queries |
+| `nextjs_docs` | Search official Next.js documentation (always prefer over assumptions or outdated knowledge) |
+| `browser_eval` | Test pages with Playwright for visual verification and client-side JavaScript testing |
+| `upgrade_nextjs_16` | Execute automated codemods for version upgrades |
+| `enable_cache_components` | Migrate to Cache Components with automated error detection and fixes |
+
+### Runtime Diagnostics Workflow
+
+**IMPORTANT**: Always use `nextjs_runtime` instead of manual file searches or curl commands when investigating running applications.
+
+1. **Check for errors**: `call_tool` with `get_errors` to retrieve all current build/runtime/type errors
+2. **Review logs**: `call_tool` with `get_logs` to access development log file (includes browser console + server output)
+3. **Inspect routes**: `call_tool` with `get_page_metadata` to understand page structure and rendering
+4. **Query config**: `call_tool` with `get_project_metadata` to see project structure and dev server URL
+
+### Best Practices
+
+- **Always `init` first**: Call `mcp__next-devtools__init` at the start of every Next.js session
+- **Prefer runtime over static**: Use `nextjs_runtime` before reading files or running grep/find commands
+- **Use browser automation**: For page verification, use `browser_eval` (executes real JavaScript) instead of `curl` (only fetches HTML)
+- **Query docs, don't assume**: Always use `nextjs_docs` for Next.js questions instead of relying on prior knowledge
+- **Auto-discovery works**: No need to manually specify ports—MCP auto-discovers running servers on common ports
+
+### Troubleshooting MCP Connection
+
+If MCP endpoint is not available:
+
+1. **Check Next.js version**: Must be v16+ (`bun list next`)
+2. **Verify dev server is running**: `bun dev` should show server started successfully
+3. **Check MCP endpoint**: Visit `http://localhost:3000/_next/mcp` in browser (should show MCP metadata)
+4. **Restart dev server**: Stop and restart `bun dev` to reinitialize MCP endpoint
+
+### Example: Debugging a Runtime Error
+
+```
+❌ DON'T: Manually read files and guess at the issue
+✅ DO:
+1. Call mcp__next-devtools__init
+2. Call nextjs_runtime with action='list_tools'
+3. Call nextjs_runtime with action='call_tool', toolName='get_errors'
+4. Review actual runtime errors from the dev server
+5. Call nextjs_runtime with action='call_tool', toolName='get_logs' for detailed logs
+6. Use browser_eval to test the page in a real browser context
+```
+
 ## Tech Stack
 
 - **Next.js 16** (App Router) with React Compiler enabled
