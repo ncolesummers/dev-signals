@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import packageJson from "../../../../package.json";
 
 /**
  * Health check endpoint
@@ -10,7 +11,7 @@ export async function GET() {
       status: "ok",
       timestamp: new Date().toISOString(),
       service: "DevSignals",
-      version: "1.0.0",
+      version: packageJson.version,
     },
     { status: 200 },
   );
