@@ -1,8 +1,8 @@
 import * as azdev from "azure-devops-node-api";
 import type { TeamProjectReference } from "azure-devops-node-api/interfaces/CoreInterfaces";
 import {
-  PullRequestStatus,
   type GitPullRequest,
+  PullRequestStatus,
 } from "azure-devops-node-api/interfaces/GitInterfaces";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
