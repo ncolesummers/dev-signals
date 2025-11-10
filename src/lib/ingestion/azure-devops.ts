@@ -103,9 +103,6 @@ async function fetchAllPRsForProject(
               } else {
                 allPRs.push(...prs);
                 skip += top;
-
-                // Small delay to avoid rate limits
-                await sleep(100);
               }
             }
 
@@ -252,9 +249,6 @@ async function ingestProjectPRs(
           if (reviewTimestamps.approvedAt !== null) {
             result.prsWithApprovals++;
           }
-
-          // Small delay to avoid rate limits (2 additional API calls per PR)
-          await sleep(100);
         } catch (error) {
           // Log warning but continue - enrichment failure shouldn't block ingestion
           result.enrichmentErrors++;

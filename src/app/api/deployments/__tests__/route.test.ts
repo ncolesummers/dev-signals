@@ -458,9 +458,6 @@ describe("POST /api/deployments", () => {
         body: JSON.stringify(deployment1),
       });
 
-      // Small delay to ensure different timestamps
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       const response2 = await fetch(API_URL, {
         method: "POST",
         headers: {

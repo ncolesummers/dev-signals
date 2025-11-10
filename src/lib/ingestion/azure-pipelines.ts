@@ -102,8 +102,6 @@ async function fetchAllCIRunsForProject(
         break;
       }
 
-      // Small delay to avoid rate limits
-      await sleep(100);
       batchNum++;
     } while (builds.length === top); // Continue while we're getting full pages
 
