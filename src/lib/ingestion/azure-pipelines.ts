@@ -7,7 +7,6 @@ import {
   createAzureDevOpsConnection,
   discoverProjects,
   getAzureDevOpsConfig,
-  sleep,
 } from "./azure-devops-client";
 import {
   type TransformedCIRun,
