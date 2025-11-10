@@ -19,6 +19,22 @@ export interface PercentileMetric {
   count: number;
 }
 
+export interface PRSizeDistribution {
+  xs: number; // 0-50 lines
+  s: number; // 51-200 lines
+  m: number; // 201-500 lines
+  l: number; // 501-1000 lines
+  xl: number; // 1000+ lines
+  total: number;
+  percentages: {
+    xs: number;
+    s: number;
+    m: number;
+    l: number;
+    xl: number;
+  };
+}
+
 /**
  * Calculates PR cycle time (p50 and p90) for merged PRs within a time window.
  * Cycle time is measured from PR creation to merge.
@@ -293,6 +309,169 @@ export async function calculatePRReviewWaitTimeByProject(
   } catch (error) {
     console.error(
       "[PR Metrics] Error calculating PR review wait time by project:",
+      error,
+    );
+    throw error;
+  }
+}
+
+/**
+ * Calculates PR size distribution for merged PRs within a time window.
+ * Categorizes PRs by total lines changed (additions + deletions) into 5 buckets:
+ * XS (0-50), S (51-200), M (201-500), L (501-1000), XL (1000+).
+ *
+ * @param startDate - Start of time window (inclusive)
+ * @param endDate - End of time window (inclusive)
+ * @param projectName - Optional project filter
+ * @returns Distribution with counts and percentages for each bucket
+ *
+ * @example
+ * const distribution = await calculatePRSizeDistribution(
+ *   new Date("2025-01-06T00:00:00Z"),
+ *   new Date("2025-01-12T23:59:59Z"),
+ *   "my-project"
+ * );
+ * // Returns: {
+ * //   xs: 10, s: 15, m: 8, l: 5, xl: 2, total: 40,
+ * //   percentages: { xs: 25, s: 37.5, m: 20, l: 12.5, xl: 5 }
+ * // }
+ */
+export async function calculatePRSizeDistribution(
+  startDate: Date,
+  endDate: Date,
+  projectName?: string,
+): Promise<PRSizeDistribution> {
+  try {
+    const conditions = [
+      gte(pullRequests.createdAt, startDate),
+      lte(pullRequests.createdAt, endDate),
+      isNotNull(pullRequests.mergedAt),
+      eq(pullRequests.isDraft, false),
+    ];
+
+    if (projectName) {
+      conditions.push(eq(pullRequests.projectName, projectName));
+    }
+
+    const result = await db
+      .select({
+        xs: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) <= 50 then 1 else 0 end), 0) as integer)`,
+        s: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 50 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 200 then 1 else 0 end), 0) as integer)`,
+        m: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 200 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 500 then 1 else 0 end), 0) as integer)`,
+        l: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 500 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 1000 then 1 else 0 end), 0) as integer)`,
+        xl: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 1000 then 1 else 0 end), 0) as integer)`,
+        total: sql<number>`cast(count(*) as integer)`,
+      })
+      .from(pullRequests)
+      .where(and(...conditions));
+
+    const row = result[0];
+
+    // Calculate percentages (handle division by zero)
+    const percentages = {
+      xs: row.total > 0 ? (row.xs / row.total) * 100 : 0,
+      s: row.total > 0 ? (row.s / row.total) * 100 : 0,
+      m: row.total > 0 ? (row.m / row.total) * 100 : 0,
+      l: row.total > 0 ? (row.l / row.total) * 100 : 0,
+      xl: row.total > 0 ? (row.xl / row.total) * 100 : 0,
+    };
+
+    console.log(
+      `[PR Metrics] Size Distribution ${projectName || "Organization"} (${startDate.toISOString()} to ${endDate.toISOString()}): XS=${row.xs} (${percentages.xs.toFixed(1)}%), S=${row.s} (${percentages.s.toFixed(1)}%), M=${row.m} (${percentages.m.toFixed(1)}%), L=${row.l} (${percentages.l.toFixed(1)}%), XL=${row.xl} (${percentages.xl.toFixed(1)}%), total=${row.total}`,
+    );
+
+    return {
+      xs: row.xs,
+      s: row.s,
+      m: row.m,
+      l: row.l,
+      xl: row.xl,
+      total: row.total,
+      percentages,
+    };
+  } catch (error) {
+    console.error(
+      "[PR Metrics] Error calculating PR size distribution:",
+      error,
+    );
+    throw error;
+  }
+}
+
+/**
+ * Calculates PR size distribution by project for all projects within a time window.
+ *
+ * @param startDate - Start of time window (inclusive)
+ * @param endDate - End of time window (inclusive)
+ * @returns Map of project names to size distributions
+ *
+ * @example
+ * const distributions = await calculatePRSizeDistributionByProject(
+ *   new Date("2025-01-06T00:00:00Z"),
+ *   new Date("2025-01-12T23:59:59Z")
+ * );
+ * // Returns: Map {
+ * //   "project-a" => { xs: 5, s: 10, m: 3, l: 2, xl: 0, total: 20, percentages: {...} },
+ * //   "project-b" => { xs: 8, s: 12, m: 5, l: 3, xl: 2, total: 30, percentages: {...} }
+ * // }
+ */
+export async function calculatePRSizeDistributionByProject(
+  startDate: Date,
+  endDate: Date,
+): Promise<Map<string, PRSizeDistribution>> {
+  try {
+    const result = await db
+      .select({
+        projectName: pullRequests.projectName,
+        xs: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) <= 50 then 1 else 0 end), 0) as integer)`,
+        s: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 50 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 200 then 1 else 0 end), 0) as integer)`,
+        m: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 200 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 500 then 1 else 0 end), 0) as integer)`,
+        l: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 500 and (${pullRequests.additions} + ${pullRequests.deletions}) <= 1000 then 1 else 0 end), 0) as integer)`,
+        xl: sql<number>`cast(coalesce(sum(case when (${pullRequests.additions} + ${pullRequests.deletions}) > 1000 then 1 else 0 end), 0) as integer)`,
+        total: sql<number>`cast(count(*) as integer)`,
+      })
+      .from(pullRequests)
+      .where(
+        and(
+          gte(pullRequests.createdAt, startDate),
+          lte(pullRequests.createdAt, endDate),
+          isNotNull(pullRequests.mergedAt),
+          eq(pullRequests.isDraft, false),
+        ),
+      )
+      .groupBy(pullRequests.projectName);
+
+    const distributions = new Map<string, PRSizeDistribution>();
+
+    for (const row of result) {
+      // Calculate percentages (handle division by zero)
+      const percentages = {
+        xs: row.total > 0 ? (row.xs / row.total) * 100 : 0,
+        s: row.total > 0 ? (row.s / row.total) * 100 : 0,
+        m: row.total > 0 ? (row.m / row.total) * 100 : 0,
+        l: row.total > 0 ? (row.l / row.total) * 100 : 0,
+        xl: row.total > 0 ? (row.xl / row.total) * 100 : 0,
+      };
+
+      distributions.set(row.projectName, {
+        xs: row.xs,
+        s: row.s,
+        m: row.m,
+        l: row.l,
+        xl: row.xl,
+        total: row.total,
+        percentages,
+      });
+
+      console.log(
+        `[PR Metrics] Size Distribution ${row.projectName} (${startDate.toISOString()} to ${endDate.toISOString()}): XS=${row.xs} (${percentages.xs.toFixed(1)}%), S=${row.s} (${percentages.s.toFixed(1)}%), M=${row.m} (${percentages.m.toFixed(1)}%), L=${row.l} (${percentages.l.toFixed(1)}%), XL=${row.xl} (${percentages.xl.toFixed(1)}%), total=${row.total}`,
+      );
+    }
+
+    return distributions;
+  } catch (error) {
+    console.error(
+      "[PR Metrics] Error calculating PR size distribution by project:",
       error,
     );
     throw error;
