@@ -3,3 +3,5 @@
 coverage = true
 # Set coverage threshold to 60%
 coverageThreshold = 0.6
+# Exclude E2E tests from Bun test runner (use Playwright instead)
+exclude = ["e2e/**/*.spec.ts", "e2e/**/*.test.ts"]
