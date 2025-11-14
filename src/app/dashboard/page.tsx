@@ -78,33 +78,97 @@ function formatHours(hours: number | null): string {
 }
 
 /**
+ * Trend type for metric comparisons
+ */
+type Trend = "up" | "down" | "same";
+
+/**
+ * Calculates trend direction by comparing current to previous value
+ * Returns undefined if previous data is not available
+ */
+function calculateTrend(
+  current: number | null,
+  previous: number | null,
+  threshold = 0.05, // 5% threshold for "same"
+): Trend | undefined {
+  if (current === null || previous === null || previous === 0) {
+    return undefined; // Not enough data to calculate trend
+  }
+
+  const percentChange = Math.abs((current - previous) / previous);
+
+  if (percentChange < threshold) {
+    return "same";
+  }
+
+  return current > previous ? "up" : "down";
+}
+
+/**
+ * Gets the previous week identifier
+ * e.g., "2025-W02" -> "2025-W01"
+ */
+function getPreviousWeek(week: string): string {
+  const match = week.match(/^(\d{4})-W(\d{2})$/);
+  if (!match) return week;
+
+  const year = Number.parseInt(match[1], 10);
+  const weekNum = Number.parseInt(match[2], 10);
+
+  if (weekNum === 1) {
+    // Go to last week of previous year (assume 52 weeks)
+    return `${year - 1}-W52`;
+  }
+
+  return `${year}-W${String(weekNum - 1).padStart(2, "0")}`;
+}
+
+/**
  * Dashboard Page Component
  *
  * Displays DORA metrics (Deployment Frequency, Lead Time, CFR, MTTR)
- * with week selection and responsive card layout.
+ * with week selection, trend indicators, and responsive card layout.
  */
 export default function DashboardPage() {
   const { selectedWeek, setSelectedWeek } = useWeekSelection();
   const [metrics, setMetrics] = React.useState<DoraMetricsResponse | null>(
     null,
   );
+  const [previousMetrics, setPreviousMetrics] =
+    React.useState<DoraMetricsResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Fetch DORA metrics
+  // Fetch DORA metrics for current and previous week
   const fetchMetrics = React.useCallback(async (week: string) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch(`/api/metrics/dora?week=${week}`);
+      const previousWeek = getPreviousWeek(week);
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch metrics: ${response.statusText}`);
+      // Fetch both current and previous week in parallel
+      const [currentResponse, previousResponse] = await Promise.all([
+        fetch(`/api/metrics/dora?week=${week}`),
+        fetch(`/api/metrics/dora?week=${previousWeek}`),
+      ]);
+
+      if (!currentResponse.ok) {
+        throw new Error(
+          `Failed to fetch metrics: ${currentResponse.statusText}`,
+        );
       }
 
-      const data: DoraMetricsResponse = await response.json();
-      setMetrics(data);
+      const currentData: DoraMetricsResponse = await currentResponse.json();
+      setMetrics(currentData);
+
+      // Previous week data is optional (might not exist for first week)
+      if (previousResponse.ok) {
+        const previousData: DoraMetricsResponse = await previousResponse.json();
+        setPreviousMetrics(previousData);
+      } else {
+        setPreviousMetrics(null);
+      }
     } catch (err) {
       console.error("Error fetching DORA metrics:", err);
       setError(
@@ -124,6 +188,27 @@ export default function DashboardPage() {
   const handleRetry = () => {
     fetchMetrics(selectedWeek);
   };
+
+  // Calculate trends
+  const deploymentFrequencyTrend = calculateTrend(
+    metrics?.deploymentFrequency.count ?? null,
+    previousMetrics?.deploymentFrequency.count ?? null,
+  );
+
+  const leadTimeTrend = calculateTrend(
+    metrics?.leadTime.p50_hours ?? null,
+    previousMetrics?.leadTime.p50_hours ?? null,
+  );
+
+  const changeFailureRateTrend = calculateTrend(
+    metrics?.changeFailureRate.percentage ?? null,
+    previousMetrics?.changeFailureRate.percentage ?? null,
+  );
+
+  const mttrTrend = calculateTrend(
+    metrics?.mttr.p50_hours ?? null,
+    previousMetrics?.mttr.p50_hours ?? null,
+  );
 
   return (
     <div className="container mx-auto space-y-8 px-4 py-8">
@@ -167,6 +252,7 @@ export default function DashboardPage() {
                 )
               : "critical"
           }
+          trend={deploymentFrequencyTrend}
           isLoading={isLoading}
           error={error || undefined}
           onRetry={handleRetry}
@@ -189,6 +275,7 @@ export default function DashboardPage() {
               ? calculateLeadTimeStatus(metrics.leadTime.p50_hours)
               : "critical"
           }
+          trend={leadTimeTrend}
           isLoading={isLoading}
           error={error || undefined}
           onRetry={handleRetry}
@@ -212,6 +299,7 @@ export default function DashboardPage() {
                 )
               : "critical"
           }
+          trend={changeFailureRateTrend}
           isLoading={isLoading}
           error={error || undefined}
           onRetry={handleRetry}
@@ -232,6 +320,7 @@ export default function DashboardPage() {
           status={
             metrics ? calculateMTTRStatus(metrics.mttr.p50_hours) : "critical"
           }
+          trend={mttrTrend}
           isLoading={isLoading}
           error={error || undefined}
           onRetry={handleRetry}
