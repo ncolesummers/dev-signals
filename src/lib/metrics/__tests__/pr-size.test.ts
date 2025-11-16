@@ -9,7 +9,7 @@
  * - S: 51-200 lines
  * - M: 201-500 lines
  * - L: 501-1000 lines
- * - XL: 1000+ lines
+ * - XL: 1001+ lines
  */
 
 import { describe, expect, test } from "bun:test";
@@ -56,7 +56,7 @@ describe("PR Size Categorization", () => {
       [750, "l"], // Mid-range
       [1000, "l"], // Upper boundary
 
-      // XL bucket (1000+ lines)
+      // XL bucket (1001+ lines)
       [1001, "xl"], // Lower boundary
       [5000, "xl"], // Large PR
       [10000, "xl"], // Very large PR
@@ -176,7 +176,7 @@ describe("PR Size Categorization", () => {
       description: "mixed large PR",
     },
 
-    // XL: 1000+ lines
+    // XL: 1001+ lines
     {
       additions: 1001,
       deletions: 0,

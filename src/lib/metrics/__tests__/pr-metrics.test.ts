@@ -640,7 +640,7 @@ describe("PR Metrics", () => {
         { additions: 300, deletions: 201, bucket: "l" }, // 501 lines (boundary)
         { additions: 600, deletions: 400, bucket: "l" }, // 1000 lines (boundary)
         { additions: 700, deletions: 100, bucket: "l" }, // 800 lines
-        // XL: 1000+ lines
+        // XL: 1001+ lines
         { additions: 600, deletions: 401, bucket: "xl" }, // 1001 lines (boundary)
         { additions: 5000, deletions: 5000, bucket: "xl" }, // 10,000 lines
         { additions: 15000, deletions: 5000, bucket: "xl" }, // 20,000 lines
