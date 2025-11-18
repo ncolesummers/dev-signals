@@ -1,0 +1,30 @@
+name: Cleanup Preview Environment
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Delete Neon preview branch (automatically happens when PR closes)
+      - name: Delete Neon Preview Branch
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          branch: preview/pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+        continue-on-error: true  # Don't fail if branch was already deleted
+
+      - name: Cleanup Summary
+        run: |
+          echo "🧹 Preview environment cleaned up"
+          echo "🗑️  Deleted Neon branch: preview/pr-${{ github.event.pull_request.number }}"
+          echo "Note: Vercel preview deployments are automatically archived"

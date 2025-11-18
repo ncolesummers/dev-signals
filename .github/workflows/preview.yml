@@ -1,0 +1,92 @@
+name: Preview Deployment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Create isolated Neon preview branch for this PR
+      - name: Create Neon Preview Branch
+        id: neon-branch
+        uses: neondatabase/create-branch-action@v5
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          branch_name: preview/pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          parent: main  # Branch from production schema
+
+      # Setup Bun runtime
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Install dependencies
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Run database migrations on preview branch
+      - name: Run Migrations on Preview Database
+        run: bun run drizzle-kit migrate
+        env:
+          DATABASE_URL: ${{ steps.neon-branch.outputs.db_url }}
+
+      # Run integration tests against migrated preview database
+      - name: Run Integration Tests
+        run: bun test src/__tests__/integration/
+        env:
+          DATABASE_URL: ${{ steps.neon-branch.outputs.db_url }}
+          NODE_ENV: test
+          # Mock Azure DevOps credentials for tests
+          AZURE_DEVOPS_PAT: test_pat
+          AZURE_DEVOPS_ORG: test_org
+          DEPLOYMENT_API_KEY: test_api_key
+
+      # Deploy to Vercel Preview
+      - name: Deploy to Vercel Preview
+        uses: amondnet/vercel-action@v25
+        id: vercel-deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+        env:
+          # Use preview branch database for this deployment
+          DATABASE_URL: ${{ steps.neon-branch.outputs.db_url }}
+
+      # Comment on PR with preview information
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `## 🚀 Preview Deployment Ready
+
+            **Preview URL:** ${{ steps.vercel-deploy.outputs.preview-url }}
+
+            **Database:**
+            - Branch: \`preview/pr-${{ github.event.pull_request.number }}\`
+            - Endpoint: \`${{ steps.neon-branch.outputs.host }}\`
+            - Database: \`${{ steps.neon-branch.outputs.db_name }}\`
+
+            **Migrations:** ✅ Applied successfully
+            **Tests:** ✅ Passed
+
+            This preview environment uses an isolated Neon database branch. Any data changes here will not affect production.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

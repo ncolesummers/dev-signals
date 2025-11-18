@@ -25,9 +25,11 @@ bun test         # Run unit tests (Bun native test runner)
 ### Database Commands
 ```bash
 bun run drizzle-kit generate   # Create migration from schema changes
-bun run drizzle-kit migrate    # Apply migrations to database
+bun run drizzle-kit migrate    # Apply migrations to database (local dev only)
 bun run drizzle-kit studio     # Open Drizzle Studio GUI
 ```
+
+**Important**: Migrations run **automatically** in production/preview via Next.js instrumentation hook (`src/instrumentation.ts`). Manual migration commands are only needed for local development with `SKIP_MIGRATIONS=true`.
 
 ### Testing Commands
 ```bash
@@ -201,6 +203,75 @@ Three core tables in `src/lib/db/schema.ts`:
    - Indexed on repository, deployedAt, environment
 
 **Database Pattern**: Singleton client exported from `src/lib/db/client.ts`. All schema definitions use Drizzle ORM with full TypeScript type inference (`$inferSelect`, `$inferInsert`).
+
+### Database Migrations (GitHub Actions Strategy)
+
+**Architecture**: Migrations run via GitHub Actions workflows during deployment, **not at runtime**. This prevents race conditions in serverless environments.
+
+**Why GitHub Actions?**:
+- ✅ Single execution point: No race conditions (Drizzle lacks advisory locking)
+- ✅ Preview testing: Isolated Neon preview branches for safe testing
+- ✅ Atomic deployments: Failed migrations prevent deployment
+- ✅ Clear audit trail: All migrations logged in GitHub Actions
+
+**The Migration Pipeline**:
+
+1. **Preview Workflow** (`.github/workflows/preview.yml`) - Runs on PR open/update
+   - Creates Neon preview branch (`preview/pr-{number}`)
+   - Runs `bun run drizzle-kit migrate` on preview database
+   - Runs integration tests against migrated schema
+   - Deploys to Vercel preview environment
+   - Comments on PR with preview URL and database info
+
+2. **Production Workflow** (`.github/workflows/production.yml`) - Runs on merge to `main`
+   - Runs `bun run drizzle-kit migrate` on production database
+   - Runs smoke tests to verify migration success
+   - Deploys to Vercel production
+
+3. **Cleanup Workflow** (`.github/workflows/cleanup.yml`) - Runs when PR closes
+   - Deletes Neon preview branch
+   - Vercel automatically archives preview deployments
+
+**How to Make Schema Changes**:
+
+```bash
+# 1. Update schema in src/lib/db/schema.ts
+# 2. Generate migration
+bun run drizzle-kit generate
+
+# 3. (Optional) Test locally
+bun run drizzle-kit migrate
+
+# 4. Commit and push
+git add drizzle/migrations/*.sql src/lib/db/schema.ts
+git commit -m "feat(db): add new column"
+git push
+
+# 5. Open PR → Preview workflow runs automatically
+# 6. Merge PR → Production workflow applies to production
+```
+
+**Preview → Production Promotion**:
+- Merging PR **is** the promotion trigger
+- No manual "apply migrations" step needed
+- Same migration files run on preview, then production
+- Failed migrations in either environment block deployment
+
+**Files**:
+- `.github/workflows/preview.yml` - Preview deployment with Neon branching
+- `.github/workflows/production.yml` - Production deployment
+- `.github/workflows/cleanup.yml` - Preview environment cleanup
+- `src/lib/db/migrate.ts` - Migration runner (called by workflows)
+- `src/instrumentation.ts` - OpenTelemetry setup (NOT migrations)
+- `drizzle/migrations/` - Auto-generated SQL migration files
+
+**Required GitHub Secrets**:
+- `NEON_API_KEY` - For preview branch creation
+- `NEON_PROJECT_ID` - Your Neon project ID
+- `PRODUCTION_DATABASE_URL` - Production connection string
+- `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` - For deployment
+
+**See**: `.github/MIGRATIONS.md` for detailed migration workflow, breaking changes, rollback procedures, and troubleshooting.
 
 ### Code Organization Patterns
 

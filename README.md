@@ -231,13 +231,40 @@ We use a comprehensive labeling system:
 
 ## 🚢 Deployment
 
-### Vercel (Recommended)
-1. Push to `main` branch
-2. Vercel auto-deploys from GitHub
-3. Add environment variables in Vercel dashboard
-4. Database migrations run automatically via `postbuild` script
+### Deployment Pipeline (Automated via GitHub Actions)
 
-### Manual Deployment
+DevSignals uses GitHub Actions for automated deployments with database migrations:
+
+#### Preview Deployments (Pull Requests)
+When you open a PR:
+1. **Neon Preview Branch** - Creates isolated database copy (`preview/pr-{number}`)
+2. **Run Migrations** - Applies schema changes to preview database
+3. **Run Tests** - Integration tests verify migrations work
+4. **Deploy to Vercel** - Preview environment with migrated database
+5. **PR Comment** - Bot comments with preview URL and database info
+
+#### Production Deployment (Merge to Main)
+When you merge a PR:
+1. **Run Migrations** - Applies schema changes to production database
+2. **Run Smoke Tests** - Verifies migration success
+3. **Deploy to Vercel** - Production deployment with updated schema
+
+#### Required GitHub Secrets
+
+Configure these in **Settings → Secrets and variables → Actions**:
+
+| Secret | Description | Where to Get It |
+|--------|-------------|-----------------|
+| `NEON_API_KEY` | Neon API key for preview branches | [Neon Console](https://console.neon.tech/app/settings/api-keys) |
+| `NEON_PROJECT_ID` | Your Neon project ID | Neon project URL or dashboard |
+| `PRODUCTION_DATABASE_URL` | Production database connection string | Neon production branch settings |
+| `VERCEL_TOKEN` | Vercel deployment token | [Vercel Settings](https://vercel.com/account/tokens) |
+| `VERCEL_ORG_ID` | Vercel organization ID | Vercel project settings |
+| `VERCEL_PROJECT_ID` | Vercel project ID | Vercel project settings |
+
+**See:** [`.github/MIGRATIONS.md`](./.github/MIGRATIONS.md) for detailed migration workflow documentation.
+
+### Manual Deployment (Local Testing)
 ```bash
 # Build the app
 bun run build
@@ -251,6 +278,8 @@ bun start
 ## 📚 Documentation
 
 - **[METRICS_DEFINITIONS.md](./METRICS_DEFINITIONS.md)** - Comprehensive metrics documentation
+- **[.github/MIGRATIONS.md](./.github/MIGRATIONS.md)** - Database migration workflow and best practices
+- **[CLAUDE.md](./CLAUDE.md)** - Development guide for working with this codebase
 - **[.env.example](./.env.example)** - Environment variable template
 - **[GitHub Issues](https://github.com/ncolesummers/dev-signals/issues)** - User stories and bugs
 
