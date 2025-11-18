@@ -53,7 +53,7 @@ const mockGitPR: GitPullRequest = {
   labels: [{ name: "feature" }, { name: "priority-high" }],
 };
 
-const mockActivePR: GitPullRequest = {
+const _mockActivePR: GitPullRequest = {
   ...mockGitPR,
   pullRequestId: 124,
   title: "Work in progress",
@@ -61,7 +61,7 @@ const mockActivePR: GitPullRequest = {
   closedDate: undefined,
 };
 
-const mockAbandonedPR: GitPullRequest = {
+const _mockAbandonedPR: GitPullRequest = {
   ...mockGitPR,
   pullRequestId: 125,
   title: "Abandoned PR",
@@ -135,53 +135,198 @@ describe("PR Data Transformation", () => {
     expect(transformed.changedFiles).toBe(0);
   });
 
-  test("should transform active PR correctly", () => {
-    const transformed = transformPRForTest(
-      mockActivePR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.state).toBe("open"); // Active -> open
-    expect(transformed.closedAt).toBeNull();
-    expect(transformed.mergedAt).toBeNull(); // Active PRs are not merged
-  });
-
-  test("should transform abandoned PR correctly", () => {
-    const transformed = transformPRForTest(
-      mockAbandonedPR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.state).toBe("closed"); // Abandoned -> closed
-  });
-
-  test("should handle missing optional fields gracefully", () => {
-    const minimalPR: GitPullRequest = {
-      pullRequestId: 999,
-      title: undefined,
-      createdBy: undefined,
-      repository: undefined,
+  // Parameterized tests for PR status transformations
+  describe.each([
+    {
       status: 1,
-      creationDate: new Date(),
-      targetRefName: undefined,
-      sourceRefName: undefined,
-    };
+      expectedState: "open",
+      description: "Active",
+      shouldHaveClosedAt: false,
+      shouldHaveMergedAt: false,
+    },
+    {
+      status: 2,
+      expectedState: "merged",
+      description: "Completed",
+      shouldHaveClosedAt: true,
+      shouldHaveMergedAt: true,
+    },
+    {
+      status: 3,
+      expectedState: "closed",
+      description: "Abandoned",
+      shouldHaveClosedAt: true,
+      shouldHaveMergedAt: false,
+    },
+  ])(
+    "PR status transformation",
+    ({
+      status,
+      expectedState,
+      description,
+      shouldHaveClosedAt,
+      shouldHaveMergedAt,
+    }) => {
+      test(`should transform ${description} (status=${status}) to ${expectedState}`, () => {
+        const pr: GitPullRequest = {
+          ...mockGitPR,
+          status,
+          closedDate: shouldHaveClosedAt
+            ? new Date("2025-01-02T15:00:00Z")
+            : undefined,
+        };
 
-    const transformed = transformPRForTest(
-      minimalPR,
-      "test-project",
-      "test-org",
-    );
+        const transformed = transformPRForTest(pr, "test-project", "test-org");
 
-    expect(transformed.title).toBe("Untitled PR");
-    expect(transformed.author).toBe("Unknown");
-    expect(transformed.repoName).toBe("unknown");
-    expect(transformed.baseBranch).toBe("main");
-    expect(transformed.headBranch).toBeNull();
-    expect(transformed.labels).toEqual([]);
+        expect(transformed.state).toBe(expectedState);
+
+        if (shouldHaveClosedAt) {
+          expect(transformed.closedAt).toBeInstanceOf(Date);
+        } else {
+          expect(transformed.closedAt).toBeNull();
+        }
+
+        if (shouldHaveMergedAt) {
+          expect(transformed.mergedAt).toBeInstanceOf(Date);
+        } else {
+          expect(transformed.mergedAt).toBeNull();
+        }
+      });
+    },
+  );
+
+  // Parameterized tests for timestamp edge cases
+  describe.each([
+    {
+      scenario: "null creationDate",
+      pr: { pullRequestId: 1, status: 1, creationDate: null },
+      expectedCreatedAt: Date,
+    },
+    {
+      scenario: "undefined creationDate",
+      pr: { pullRequestId: 2, status: 1, creationDate: undefined },
+      expectedCreatedAt: Date,
+    },
+    {
+      scenario: "undefined closedDate on active PR",
+      pr: {
+        pullRequestId: 3,
+        status: 1,
+        creationDate: new Date(),
+        closedDate: undefined,
+      },
+      expectedClosedAt: null,
+    },
+    {
+      scenario: "null closedDate on active PR",
+      pr: {
+        pullRequestId: 4,
+        status: 1,
+        creationDate: new Date(),
+        closedDate: null,
+      },
+      expectedClosedAt: null,
+    },
+  ])("Timestamp edge cases", ({ scenario, pr }) => {
+    test(`should handle ${scenario}`, () => {
+      const transformed = transformPRForTest(
+        pr as GitPullRequest,
+        "test-project",
+        "test-org",
+      );
+
+      // createdAt should always be a Date (defaults to new Date() if missing)
+      expect(transformed.createdAt).toBeInstanceOf(Date);
+
+      // closedAt depends on the PR status
+      if (pr.status === 1) {
+        expect(transformed.closedAt).toBeNull();
+      }
+    });
   });
+
+  // Parameterized tests for missing optional fields
+  describe.each([
+    {
+      field: "title",
+      pr: {
+        pullRequestId: 1,
+        status: 1,
+        title: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: "Untitled PR",
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.title,
+    },
+    {
+      field: "author",
+      pr: {
+        pullRequestId: 2,
+        status: 1,
+        createdBy: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: "Unknown",
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.author,
+    },
+    {
+      field: "repoName",
+      pr: {
+        pullRequestId: 3,
+        status: 1,
+        repository: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: "unknown",
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.repoName,
+    },
+    {
+      field: "baseBranch",
+      pr: {
+        pullRequestId: 4,
+        status: 1,
+        targetRefName: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: "main",
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.baseBranch,
+    },
+    {
+      field: "headBranch",
+      pr: {
+        pullRequestId: 5,
+        status: 1,
+        sourceRefName: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: null,
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.headBranch,
+    },
+    {
+      field: "labels",
+      pr: {
+        pullRequestId: 6,
+        status: 1,
+        labels: undefined,
+        creationDate: new Date(),
+      },
+      expectedValue: [],
+      accessor: (t: ReturnType<typeof transformPRForTest>) => t.labels,
+    },
+  ])(
+    "Missing optional field handling",
+    ({ field, pr, expectedValue, accessor }) => {
+      test(`should default ${field} when missing`, () => {
+        const transformed = transformPRForTest(
+          pr as GitPullRequest,
+          "test-project",
+          "test-org",
+        );
+
+        expect(accessor(transformed)).toEqual(expectedValue);
+      });
+    },
+  );
 });
 
 // ============================================================================
