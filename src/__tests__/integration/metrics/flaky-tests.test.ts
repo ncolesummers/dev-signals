@@ -19,7 +19,7 @@ import {
 // ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
 // ============================================================================
 // This is an INTEGRATION TEST using PGlite (Postgres in WebAssembly).
-// PGlite runs in-process with zero setup - no Docker, no Supabase needed.
+// PGlite runs in-process with zero setup - no Docker, no cloud database needed.
 //
 // SAFETY: PGlite uses in-memory database isolated per test run. Cannot affect
 // production data because it never connects to external databases.

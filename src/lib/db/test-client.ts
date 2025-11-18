@@ -5,7 +5,7 @@
  * servers, just pure Postgres compiled to WebAssembly. Perfect for integration
  * tests that need real database behavior without infrastructure overhead.
  *
- * Why PGlite over Docker/Supabase?
+ * Why PGlite over Docker/cloud databases?
  * - Zero setup: No Docker daemon, no cloud project, just `bun test`
  * - Fast: In-process, no network overhead
  * - Real Postgres: Not SQLite - catches Postgres-specific bugs

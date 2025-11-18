@@ -25,7 +25,7 @@ import {
 // This is an INTEGRATION TEST that verifies database queries work correctly
 // against a real Postgres database (PGlite - Postgres compiled to WebAssembly).
 //
-// PGlite runs in-process with zero setup - no Docker, no Supabase, just pure
+// PGlite runs in-process with zero setup - no Docker, no cloud database, just pure
 // Postgres in WASM. Perfect for testing SQL queries, aggregations, and JSONB
 // operations without infrastructure overhead.
 //

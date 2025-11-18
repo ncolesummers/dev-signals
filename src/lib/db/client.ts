@@ -9,7 +9,7 @@ import * as schema from "./schema";
 // ============================================================================
 // This client automatically routes to the correct database based on environment:
 // - In tests (NODE_ENV=test): Uses PGlite (Postgres in WebAssembly, in-memory)
-// - In production/dev: Uses real Supabase connection
+// - In production/dev: Uses real Neon connection
 //
 // This enables metric calculation functions to import `db` from this file
 // without needing to know whether they're running in tests or production.
@@ -28,7 +28,7 @@ const isTestEnvironment =
     false);
 
 // In test environment, use PGlite (imported dynamically to avoid circular deps)
-// In production, use real Supabase connection
+// In production, use real Neon connection
 let db: PostgresJsDatabase<typeof schema> | PgliteDatabase<typeof schema>;
 
 if (isTestEnvironment) {
@@ -37,13 +37,13 @@ if (isTestEnvironment) {
   const { testDb } = await import("./test-client");
   db = testDb;
 } else {
-  console.log("[DB] Using production Supabase database");
+  console.log("[DB] Using production Neon database");
   // Validate DATABASE_URL exists (only required for production path)
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL environment variable is not set");
   }
-  // Create Supabase connection client
-  // Note: { prepare: false } is required for Supabase's Transaction pooler mode (serverless)
+  // Create Neon connection client
+  // Note: { prepare: false } is required for Neon's connection pooling in serverless environments
   const client = postgres(process.env.DATABASE_URL, { prepare: false });
   db = drizzle(client, { schema });
 }

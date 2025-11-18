@@ -12,6 +12,10 @@
         "--api-key",
         "<YOUR_API_KEY_HERE>"
       ]
+    },
+      "Neon": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "https://mcp.neon.tech/mcp"]
     }
   }
 }
