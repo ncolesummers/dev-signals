@@ -19,10 +19,10 @@ import { registerOTel } from "@vercel/otel";
  * Only runs on the server (not in browser or during build).
  */
 export async function register() {
-	// Only run on server-side (not in edge runtime or browser)
-	if (process.env.NEXT_RUNTIME === "nodejs") {
-		console.log("[Instrumentation] Initializing OpenTelemetry...");
-		registerOTel("dev-signals");
-		console.log("[Instrumentation] ✅ OTEL registered");
-	}
+  // Only run on server-side (not in edge runtime or browser)
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    console.log("[Instrumentation] Initializing OpenTelemetry...");
+    registerOTel("dev-signals");
+    console.log("[Instrumentation] ✅ OTEL registered");
+  }
 }
