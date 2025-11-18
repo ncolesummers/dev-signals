@@ -38,40 +38,40 @@ import postgres from "postgres";
  * @throws Error if DATABASE_URL is not set or migrations fail
  */
 export async function runMigrations(): Promise<void> {
-	// Validate DATABASE_URL exists
-	if (!process.env.DATABASE_URL) {
-		throw new Error(
-			"[Migrations] DATABASE_URL environment variable is not set",
-		);
-	}
+  // Validate DATABASE_URL exists
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      "[Migrations] DATABASE_URL environment variable is not set",
+    );
+  }
 
-	console.log("[Migrations] Starting database migrations...");
-	console.log(
-		`[Migrations] Target: ${process.env.DATABASE_URL.split("@")[1]?.split("/")[0] || "unknown"}`,
-	);
+  console.log("[Migrations] Starting database migrations...");
+  console.log(
+    `[Migrations] Target: ${process.env.DATABASE_URL.split("@")[1]?.split("/")[0] || "unknown"}`,
+  );
 
-	// Create migration-specific client
-	// - max: 1 connection (migrations are sequential)
-	// - prepare: false (required for Neon's connection pooling)
-	const migrationClient = postgres(process.env.DATABASE_URL, {
-		max: 1,
-		prepare: false,
-	});
+  // Create migration-specific client
+  // - max: 1 connection (migrations are sequential)
+  // - prepare: false (required for Neon's connection pooling)
+  const migrationClient = postgres(process.env.DATABASE_URL, {
+    max: 1,
+    prepare: false,
+  });
 
-	const db = drizzle(migrationClient);
+  const db = drizzle(migrationClient);
 
-	try {
-		// Run migrations from ./drizzle/migrations
-		// Drizzle tracks applied migrations in a metadata table
-		await migrate(db, { migrationsFolder: "./drizzle/migrations" });
+  try {
+    // Run migrations from ./drizzle/migrations
+    // Drizzle tracks applied migrations in a metadata table
+    await migrate(db, { migrationsFolder: "./drizzle/migrations" });
 
-		console.log("[Migrations] ✅ All migrations applied successfully");
-	} catch (error) {
-		console.error("[Migrations] ❌ Migration failed:", error);
-		throw error; // Re-throw to fail GitHub Actions workflow
-	} finally {
-		// Always clean up connection
-		await migrationClient.end();
-		console.log("[Migrations] Connection closed");
-	}
+    console.log("[Migrations] ✅ All migrations applied successfully");
+  } catch (error) {
+    console.error("[Migrations] ❌ Migration failed:", error);
+    throw error; // Re-throw to fail GitHub Actions workflow
+  } finally {
+    // Always clean up connection
+    await migrationClient.end();
+    console.log("[Migrations] Connection closed");
+  }
 }
