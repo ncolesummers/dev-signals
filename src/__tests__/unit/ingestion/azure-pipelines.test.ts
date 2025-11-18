@@ -207,8 +207,8 @@ describe("Flaky Detection - Time Window Logic", () => {
     );
 
     for (let i = 0; i < sorted.length - 1; i++) {
-      expect(sorted[i].startTime?.getTime()).toBeLessThanOrEqual(
-        sorted[i + 1].startTime?.getTime(),
+      expect(sorted[i].startTime?.getTime() ?? 0).toBeLessThanOrEqual(
+        sorted[i + 1].startTime?.getTime() ?? 0,
       );
     }
   });
