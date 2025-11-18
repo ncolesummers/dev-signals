@@ -1,12 +1,31 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { db } from "@/lib/db/client";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { ciRuns } from "@/lib/db/schema";
+import { testDb as db, initializeTestSchema } from "@/lib/db/test-client";
 import {
   calculateFlakyTestRate,
   calculateFlakyTestRateByProject,
   getCISuccessRate,
   getFlakyRunCount,
-} from "../flaky-tests";
+} from "@/lib/metrics/flaky-tests";
+
+// ============================================================================
+// ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
+// ============================================================================
+// This is an INTEGRATION TEST using PGlite (Postgres in WebAssembly).
+// PGlite runs in-process with zero setup - no Docker, no Supabase needed.
+//
+// SAFETY: PGlite uses in-memory database isolated per test run. Cannot affect
+// production data because it never connects to external databases.
+//
+// See GitHub Issue #39 for context on why we added PGlite.
+// ============================================================================
 
 /**
  * Test Suite for Flaky Test Metrics Calculation
@@ -16,12 +35,14 @@ import {
  * - Per-project aggregation
  * - Time window filtering
  * - Edge cases (no data, all flaky, zero flaky)
- *
- * Note: These are integration tests that require a test database.
- * For CI/CD, ensure test database is available or use mocks.
  */
 
 describe("Flaky Test Rate Calculation", () => {
+  // Initialize PGlite database schema before all tests
+  beforeAll(async () => {
+    await initializeTestSchema();
+  });
+
   // Clean up test data before each test
   beforeEach(async () => {
     await db.delete(ciRuns);

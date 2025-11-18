@@ -4,7 +4,7 @@ import {
   getWeekBoundaries,
   getWeekIdentifier,
   isValidWeekIdentifier,
-} from "../week";
+} from "@/lib/utils/week";
 
 describe("Week Utilities", () => {
   describe("getWeekBoundaries", () => {

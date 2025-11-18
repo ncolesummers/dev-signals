@@ -97,7 +97,7 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 | **Linting** | Biome |
 | **CI/CD** | GitHub Actions (this repo) |
 | **Metrics Source** | Azure DevOps (multi-project tracking) |
-| **Testing** | Vitest (unit) + Playwright (E2E) |
+| **Testing** | Bun Test (unit + integration) + Playwright (E2E) |
 
 ---
 
@@ -105,12 +105,25 @@ DevSignals tracks DORA metrics and flow diagnostics to help teams understand del
 
 ### Unit Tests
 ```bash
-# Run tests
+# Run all tests (unit + integration)
 bun test
+
+# Run unit tests only
+bun test:unit
+
+# Run integration tests only
+bun test:integration
 
 # Run with coverage (60% threshold)
 bun test --coverage
+
+# Watch mode
+bun test:watch
 ```
+
+**Test Structure:**
+- `src/__tests__/unit/` - Fast unit tests (no external dependencies)
+- `src/__tests__/integration/` - Integration tests using PGlite (in-memory Postgres)
 
 ### E2E Tests (Playwright)
 ```bash

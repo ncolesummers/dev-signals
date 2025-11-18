@@ -1,6 +1,28 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { db } from "@/lib/db/client";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { eq } from "drizzle-orm";
+import { NextRequest } from "next/server";
+import { POST } from "@/app/api/deployments/route";
 import { deployments } from "@/lib/db/schema";
+import { testDb as db, initializeTestSchema } from "@/lib/db/test-client";
+
+// ============================================================================
+// ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
+// ============================================================================
+// This is an INTEGRATION TEST using PGlite (Postgres in WebAssembly).
+// PGlite runs in-process with zero setup - no Docker, no Supabase needed.
+//
+// SAFETY: PGlite uses in-memory database isolated per test run. Cannot affect
+// production data because it never connects to external databases.
+//
+// See GitHub Issue #39 for context on why we added PGlite.
+// ============================================================================
 
 /**
  * Test Suite for Manual Deployment Event API
@@ -11,14 +33,24 @@ import { deployments } from "@/lib/db/schema";
  * - Authentication/authorization (401)
  * - Database persistence
  * - Error handling (500)
- *
- * Note: These are integration tests that require:
- * - Test database
- * - DEPLOYMENT_API_KEY environment variable
  */
 
-const API_URL = "http://localhost:3000/api/deployments";
 const VALID_API_KEY = process.env.DEPLOYMENT_API_KEY || "test_api_key_12345";
+
+// Helper to create a NextRequest with JSON body and headers
+function createRequest(
+  body: unknown,
+  headers: Record<string, string> = {},
+): NextRequest {
+  return new NextRequest("http://localhost:3000/api/deployments", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
 
 // Test data
 const validDeployment = {
@@ -33,6 +65,11 @@ const validDeployment = {
 };
 
 describe("POST /api/deployments", () => {
+  // Initialize PGlite database schema before all tests
+  beforeAll(async () => {
+    await initializeTestSchema();
+  });
+
   // Clean up test data before and after each test
   beforeEach(async () => {
     await db.delete(deployments);
@@ -44,13 +81,8 @@ describe("POST /api/deployments", () => {
 
   describe("Authentication", () => {
     test("should return 401 when Authorization header is missing", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(validDeployment),
-      });
+      const request = createRequest(validDeployment);
+      const response = await POST(request);
 
       expect(response.status).toBe(401);
 
@@ -60,14 +92,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should return 401 when Authorization scheme is not Bearer", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Basic ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(validDeployment),
+      const request = createRequest(validDeployment, {
+        Authorization: `Basic ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(401);
 
@@ -77,14 +105,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should return 401 when API key is invalid", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer invalid_key",
-        },
-        body: JSON.stringify(validDeployment),
+      const request = createRequest(validDeployment, {
+        Authorization: "Bearer invalid_key",
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(401);
 
@@ -96,14 +120,10 @@ describe("POST /api/deployments", () => {
 
   describe("Request Validation", () => {
     test("should return 400 when request body is not valid JSON", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: "invalid json{",
+      const request = createRequest("invalid json{", {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -118,14 +138,10 @@ describe("POST /api/deployments", () => {
       };
       delete invalidData.environment;
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -140,14 +156,10 @@ describe("POST /api/deployments", () => {
         environment: "invalid-env",
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -163,14 +175,10 @@ describe("POST /api/deployments", () => {
         commitSha: "abc123", // Too short
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -186,14 +194,10 @@ describe("POST /api/deployments", () => {
         commitSha: "xyz1234567890xyz1234567890xyz123456789z", // Invalid hex
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -209,14 +213,10 @@ describe("POST /api/deployments", () => {
         deployedAt: "2025-11-09", // Missing time portion
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -232,14 +232,10 @@ describe("POST /api/deployments", () => {
       };
       delete invalidData.projectName;
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -255,14 +251,10 @@ describe("POST /api/deployments", () => {
         status: "pending", // Invalid status
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(invalidData),
+      const request = createRequest(invalidData, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(400);
 
@@ -283,14 +275,10 @@ describe("POST /api/deployments", () => {
         orgName: "test-org",
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(minimalDeployment),
+      const request = createRequest(minimalDeployment, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(201);
 
@@ -307,14 +295,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should create deployment with all optional fields", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(validDeployment),
+      const request = createRequest(validDeployment, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(201);
 
@@ -332,14 +316,10 @@ describe("POST /api/deployments", () => {
         notes: "Deployment failed due to timeout",
       };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(failedDeployment),
+      const request = createRequest(failedDeployment, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(201);
 
@@ -367,14 +347,10 @@ describe("POST /api/deployments", () => {
           environment: environment as "production" | "staging" | "development",
         };
 
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${VALID_API_KEY}`,
-          },
-          body: JSON.stringify(deploymentData),
+        const request = createRequest(deploymentData, {
+          Authorization: `Bearer ${VALID_API_KEY}`,
         });
+        const response = await POST(request);
 
         expect(response.status).toBe(201);
 
@@ -384,14 +360,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should persist deployment to database", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(validDeployment),
+      const request = createRequest(validDeployment, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(201);
 
@@ -402,7 +374,7 @@ describe("POST /api/deployments", () => {
       const [dbDeployment] = await db
         .select()
         .from(deployments)
-        .where((d) => d.deploymentId === deploymentId);
+        .where(eq(deployments.deploymentId, deploymentId));
 
       expect(dbDeployment).toBeDefined();
       expect(dbDeployment.environment).toBe("production");
@@ -414,14 +386,10 @@ describe("POST /api/deployments", () => {
     });
 
     test("should set startedAt and completedAt to deployedAt timestamp", async () => {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(validDeployment),
+      const request = createRequest(validDeployment, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
+      const response = await POST(request);
 
       expect(response.status).toBe(201);
 
@@ -449,23 +417,15 @@ describe("POST /api/deployments", () => {
         commitSha: "def1234567890abc1234567890def123456789ab",
       };
 
-      const response1 = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(deployment1),
+      const request1 = createRequest(deployment1, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
+      });
+      const request2 = createRequest(deployment2, {
+        Authorization: `Bearer ${VALID_API_KEY}`,
       });
 
-      const response2 = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VALID_API_KEY}`,
-        },
-        body: JSON.stringify(deployment2),
-      });
+      const response1 = await POST(request1);
+      const response2 = await POST(request2);
 
       const data1 = await response1.json();
       const data2 = await response2.json();
@@ -490,14 +450,10 @@ describe("POST /api/deployments", () => {
           projectName: projects[i],
         };
 
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${VALID_API_KEY}`,
-          },
-          body: JSON.stringify(deploymentData),
+        const request = createRequest(deploymentData, {
+          Authorization: `Bearer ${VALID_API_KEY}`,
         });
+        const response = await POST(request);
 
         expect(response.status).toBe(201);
 

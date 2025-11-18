@@ -177,9 +177,9 @@ describe("Flaky Detection Algorithm - Scenario Tests", () => {
     expect(scenario.builds).toHaveLength(2);
 
     // Verify time difference > 24 hours
-    const timeDiff =
-      scenario.builds[1].startTime?.getTime() -
-      scenario.builds[0].startTime?.getTime();
+    const time1 = scenario.builds[1].startTime?.getTime() ?? 0;
+    const time0 = scenario.builds[0].startTime?.getTime() ?? 0;
+    const timeDiff = time1 - time0;
     const hoursDiff = timeDiff / (1000 * 60 * 60);
     expect(hoursDiff).toBeGreaterThan(24);
   });
@@ -203,7 +203,7 @@ describe("Flaky Detection - Time Window Logic", () => {
   test("should sort builds by startedAt timestamp", () => {
     const scenario = createMultipleRetryFlakyScenario();
     const sorted = scenario.builds.sort(
-      (a, b) => a.startTime?.getTime() - b.startTime?.getTime(),
+      (a, b) => (a.startTime?.getTime() ?? 0) - (b.startTime?.getTime() ?? 0),
     );
 
     for (let i = 0; i < sorted.length - 1; i++) {

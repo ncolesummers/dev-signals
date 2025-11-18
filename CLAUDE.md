@@ -31,7 +31,11 @@ bun run drizzle-kit studio     # Open Drizzle Studio GUI
 
 ### Testing Commands
 ```bash
+bun test                       # Run all tests (unit + integration)
+bun test:unit                  # Run unit tests only
+bun test:integration           # Run integration tests only
 bun test --coverage            # Run tests with coverage report (60% threshold)
+bun test:watch                 # Run tests in watch mode
 bunx playwright install        # Install E2E test browsers
 bunx playwright test           # Run E2E tests
 bunx playwright test --ui      # Run E2E tests in UI mode

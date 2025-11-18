@@ -1,6 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { db } from "@/lib/db/client";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { pullRequests } from "@/lib/db/schema";
+import { testDb as db, initializeTestSchema } from "@/lib/db/test-client";
 import {
   calculatePRCycleTime,
   calculatePRCycleTimeByProject,
@@ -8,11 +15,28 @@ import {
   calculatePRReviewWaitTimeByProject,
   calculatePRSizeDistribution,
   calculatePRSizeDistributionByProject,
-} from "../pr-metrics";
+} from "@/lib/metrics/pr-metrics";
+
+// ============================================================================
+// ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
+// ============================================================================
+// This is an INTEGRATION TEST using PGlite (Postgres in WebAssembly).
+// PGlite runs in-process with zero setup - no Docker, no Supabase needed.
+//
+// SAFETY: PGlite uses in-memory database isolated per test run. Cannot affect
+// production data because it never connects to external databases.
+//
+// See GitHub Issue #39 for context on why we added PGlite.
+// ============================================================================
 
 describe("PR Metrics", () => {
   const startDate = new Date("2025-01-06T00:00:00Z"); // Monday W02
   const endDate = new Date("2025-01-12T23:59:59Z"); // Sunday W02
+
+  // Initialize PGlite database schema before all tests
+  beforeAll(async () => {
+    await initializeTestSchema();
+  });
 
   beforeEach(async () => {
     await db.delete(pullRequests);

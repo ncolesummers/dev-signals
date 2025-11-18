@@ -49,9 +49,7 @@ import { deployments } from "@/lib/db/schema";
 // Validation schema for deployment request body
 const deploymentSchema = z.object({
   environment: z.enum(["production", "staging", "development"], {
-    errorMap: () => ({
-      message: "environment must be one of: production, staging, development",
-    }),
+    message: "environment must be one of: production, staging, development",
   }),
   commitSha: z
     .string()
@@ -70,7 +68,7 @@ const deploymentSchema = z.object({
     .max(255, "orgName must be 255 characters or less"),
   status: z
     .enum(["success", "failure"], {
-      errorMap: () => ({ message: "status must be either: success, failure" }),
+      message: "status must be either: success, failure",
     })
     .default("success"),
   deployedBy: z

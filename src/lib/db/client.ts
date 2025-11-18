@@ -1,7 +1,7 @@
+import type { PgliteDatabase } from "drizzle-orm/pglite";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import type { PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema";
 
 // ============================================================================
@@ -23,8 +23,9 @@ const isTestEnvironment =
   process.env.VITEST === "true" ||
   process.env.JEST_WORKER_ID !== undefined ||
   process.env.BUN_TEST === "true" ||
-  // Bun test runner detection
-  ((globalThis as any).Bun?.main?.includes(".test.") ?? false);
+  // Bun test runner detection - check if main file path includes ".test."
+  ((globalThis as { Bun?: { main?: string } }).Bun?.main?.includes(".test.") ??
+    false);
 
 // In test environment, use PGlite (imported dynamically to avoid circular deps)
 // In production, use real Supabase connection

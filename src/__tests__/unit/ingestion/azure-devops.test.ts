@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { GitPullRequest } from "azure-devops-node-api/interfaces/GitInterfaces";
 import {
   calculateApprovedAt,
   calculateFirstReviewAt,
-} from "../transformers/transform-pr";
+} from "@/lib/ingestion/transformers/transform-pr";
 import {
   createPRWithApprovalButNoComment,
   createPRWithCommentsButNoApproval,
@@ -30,45 +29,6 @@ import {
  */
 
 // ============================================================================
-// Mock Data
-// ============================================================================
-
-const mockGitPR: GitPullRequest = {
-  pullRequestId: 123,
-  title: "Add new feature",
-  createdBy: {
-    displayName: "John Doe",
-    id: "user-1",
-  },
-  repository: {
-    name: "my-repo",
-    id: "repo-1",
-  },
-  status: 2, // Completed (1=Active, 2=Completed, 3=Abandoned)
-  creationDate: new Date("2025-01-01T10:00:00Z"),
-  closedDate: new Date("2025-01-02T15:00:00Z"),
-  sourceRefName: "refs/heads/feature-branch",
-  targetRefName: "refs/heads/main",
-  isDraft: false,
-  labels: [{ name: "feature" }, { name: "priority-high" }],
-};
-
-const mockActivePR: GitPullRequest = {
-  ...mockGitPR,
-  pullRequestId: 124,
-  title: "Work in progress",
-  status: 1, // Active
-  closedDate: undefined,
-};
-
-const mockAbandonedPR: GitPullRequest = {
-  ...mockGitPR,
-  pullRequestId: 125,
-  title: "Abandoned PR",
-  status: 3, // Abandoned
-};
-
-// ============================================================================
 // Environment Variable Validation Tests
 // ============================================================================
 
@@ -86,101 +46,14 @@ describe("Environment Variable Validation", () => {
   test("should handle empty AZURE_DEVOPS_EXCLUDE_PROJECTS", () => {
     delete process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS;
 
-    const excludeProjects = process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS
-      ? process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS.split(",").map((p) =>
-          p.trim(),
-        )
+    const envValue = process.env.AZURE_DEVOPS_EXCLUDE_PROJECTS as
+      | string
+      | undefined;
+    const excludeProjects = envValue
+      ? envValue.split(",").map((p: string) => p.trim())
       : [];
 
     expect(excludeProjects).toEqual([]);
-  });
-});
-
-// ============================================================================
-// PR Data Transformation Tests
-// ============================================================================
-
-describe("PR Data Transformation", () => {
-  test("should transform completed PR correctly", () => {
-    const transformed = transformPRForTest(
-      mockGitPR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.prNumber).toBe(123);
-    expect(transformed.title).toBe("Add new feature");
-    expect(transformed.author).toBe("John Doe");
-    expect(transformed.repoName).toBe("my-repo");
-    expect(transformed.projectName).toBe("test-project");
-    expect(transformed.orgName).toBe("test-org");
-    expect(transformed.state).toBe("merged"); // Completed -> merged
-    expect(transformed.baseBranch).toBe("main");
-    expect(transformed.headBranch).toBe("feature-branch");
-    expect(transformed.labels).toEqual(["feature", "priority-high"]);
-    expect(transformed.isDraft).toBe(false);
-
-    // Timestamps
-    expect(transformed.createdAt).toBeInstanceOf(Date);
-    expect(transformed.closedAt).toBeInstanceOf(Date);
-    expect(transformed.mergedAt).toBeInstanceOf(Date); // Should be set for completed PRs
-
-    // Review timestamps should be null (deferred to US2.1b)
-    expect(transformed.firstReviewAt).toBeNull();
-    expect(transformed.approvedAt).toBeNull();
-
-    // Size metrics (not available in basic API - defaults to 0)
-    expect(transformed.additions).toBe(0);
-    expect(transformed.deletions).toBe(0);
-    expect(transformed.changedFiles).toBe(0);
-  });
-
-  test("should transform active PR correctly", () => {
-    const transformed = transformPRForTest(
-      mockActivePR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.state).toBe("open"); // Active -> open
-    expect(transformed.closedAt).toBeNull();
-    expect(transformed.mergedAt).toBeNull(); // Active PRs are not merged
-  });
-
-  test("should transform abandoned PR correctly", () => {
-    const transformed = transformPRForTest(
-      mockAbandonedPR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.state).toBe("closed"); // Abandoned -> closed
-  });
-
-  test("should handle missing optional fields gracefully", () => {
-    const minimalPR: GitPullRequest = {
-      pullRequestId: 999,
-      title: undefined,
-      createdBy: undefined,
-      repository: undefined,
-      status: 1,
-      creationDate: new Date(),
-      targetRefName: undefined,
-      sourceRefName: undefined,
-    };
-
-    const transformed = transformPRForTest(
-      minimalPR,
-      "test-project",
-      "test-org",
-    );
-
-    expect(transformed.title).toBe("Untitled PR");
-    expect(transformed.author).toBe("Unknown");
-    expect(transformed.repoName).toBe("unknown");
-    expect(transformed.baseBranch).toBe("main");
-    expect(transformed.headBranch).toBeNull();
-    expect(transformed.labels).toEqual([]);
   });
 });
 
@@ -337,69 +210,6 @@ describe("Pagination Logic", () => {
 
 // ============================================================================
 // Test Helpers
-// ============================================================================
-
-/**
- * Simplified version of transformPullRequest for testing
- * (Duplicates logic from main module to avoid import issues)
- */
-function transformPRForTest(
-  pr: GitPullRequest,
-  projectName: string,
-  orgName: string,
-) {
-  const repoName = pr.repository?.name || "unknown";
-
-  let state = "open";
-  if (pr.status === 2) {
-    state = "merged";
-  } else if (pr.status === 3) {
-    state = "closed";
-  }
-
-  const additions = 0;
-  const deletions = 0;
-  const changedFiles = 0;
-
-  const labels: string[] = pr.labels?.map((label) => label.name || "") || [];
-  const isDraft = pr.isDraft || false;
-
-  const baseBranch = pr.targetRefName?.replace("refs/heads/", "") || "main";
-  const headBranch = pr.sourceRefName?.replace("refs/heads/", "") || null;
-
-  const createdAt = pr.creationDate ? new Date(pr.creationDate) : new Date();
-  const updatedAt = pr.closedDate ? new Date(pr.closedDate) : new Date();
-  const closedAt = pr.closedDate ? new Date(pr.closedDate) : null;
-  const mergedAt =
-    pr.status === 2 && pr.closedDate ? new Date(pr.closedDate) : null;
-
-  const firstReviewAt = null;
-  const approvedAt = null;
-
-  return {
-    prNumber: pr.pullRequestId || 0,
-    repoName,
-    orgName,
-    projectName,
-    title: pr.title || "Untitled PR",
-    author: pr.createdBy?.displayName || "Unknown",
-    state,
-    createdAt,
-    updatedAt,
-    closedAt,
-    mergedAt,
-    firstReviewAt,
-    approvedAt,
-    additions,
-    deletions,
-    changedFiles,
-    labels,
-    isDraft,
-    baseBranch,
-    headBranch,
-  };
-}
-
 // ============================================================================
 // Review Timestamp Enrichment Tests (US2.1b)
 // ============================================================================

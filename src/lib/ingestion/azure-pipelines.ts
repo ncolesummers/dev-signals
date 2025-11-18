@@ -1,6 +1,6 @@
 import type * as azdev from "azure-devops-node-api";
 import type { Build } from "azure-devops-node-api/interfaces/BuildInterfaces";
-import { and, eq, gte, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { ciRuns } from "@/lib/db/schema";
 import {
@@ -56,6 +56,7 @@ async function fetchAllCIRunsForProject(
     let continuationToken: string | undefined;
     const top = 100; // Fetch 100 builds at a time
     let batchNum = 1;
+    let builds: Build[] = [];
 
     console.log(
       `[${projectName}] Fetching builds since ${NINETY_DAYS_AGO.toISOString().split("T")[0]} (90 days)`,
@@ -63,7 +64,7 @@ async function fetchAllCIRunsForProject(
 
     do {
       // Wrap each API call with timeout protection (60 seconds)
-      const builds = await trackStep(
+      builds = await trackStep(
         `fetch-builds-${projectName}-batch-${batchNum}`,
         () =>
           buildApi.getBuilds(
@@ -395,9 +396,7 @@ export async function enrichCIRunsWithPRLinks(): Promise<{
     const runsWithoutPR = await db
       .select()
       .from(ciRuns)
-      .where(
-        and(eq(ciRuns.prNumber, null), eq(ciRuns.commitSha, null) === false),
-      );
+      .where(and(isNull(ciRuns.prNumber), isNotNull(ciRuns.commitSha)));
 
     console.log(
       `[PR Linking] Found ${runsWithoutPR.length} runs without PR links`,

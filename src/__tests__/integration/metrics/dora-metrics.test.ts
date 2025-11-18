@@ -1,6 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { db } from "@/lib/db/client";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { deployments, pullRequests } from "@/lib/db/schema";
+import { testDb as db, initializeTestSchema } from "@/lib/db/test-client";
 import {
   calculateChangeFailureRate,
   calculateChangeFailureRateByProject,
@@ -10,11 +17,42 @@ import {
   calculateLeadTimeForChangesByProject,
   calculateMTTR,
   calculateMTTRByProject,
-} from "../dora-metrics";
+} from "@/lib/metrics/dora-metrics";
+
+// ============================================================================
+// ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
+// ============================================================================
+// This is an INTEGRATION TEST that verifies database queries work correctly
+// against a real Postgres database (PGlite - Postgres compiled to WebAssembly).
+//
+// PGlite runs in-process with zero setup - no Docker, no Supabase, just pure
+// Postgres in WASM. Perfect for testing SQL queries, aggregations, and JSONB
+// operations without infrastructure overhead.
+//
+// SAFETY: PGlite uses in-memory database that's isolated per test run. Even
+// though this file uses unconditional DELETE statements, they can't affect
+// production data because PGlite never connects to external databases.
+//
+// CLEANUP: This test file uses UNCONDITIONAL DELETE statements in beforeEach/afterEach:
+//   - await db.delete(deployments);   // Deletes ALL deployments in PGlite
+//   - await db.delete(pullRequests);  // Deletes ALL pull requests in PGlite
+//
+// RUN INTEGRATION TESTS: bun run test:integration
+//
+// FUTURE ENHANCEMENT: Migrate to transaction-based tests that rollback after
+// each test, or add WHERE clauses with test_ prefix markers (Issue #40-43).
+//
+// See GitHub Issue #39 for context on why we added PGlite.
+// ============================================================================
 
 describe("DORA Metrics", () => {
   const startDate = new Date("2025-01-06T00:00:00Z"); // Monday W02
   const endDate = new Date("2025-01-12T23:59:59Z"); // Sunday W02
+
+  // Initialize PGlite database schema before all tests
+  beforeAll(async () => {
+    await initializeTestSchema();
+  });
 
   beforeEach(async () => {
     await db.delete(deployments);

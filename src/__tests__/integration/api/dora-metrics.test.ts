@@ -1,6 +1,27 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { db } from "@/lib/db/client";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { NextRequest } from "next/server";
+import { GET } from "@/app/api/metrics/dora/route";
 import { deployments, pullRequests } from "@/lib/db/schema";
+import { testDb as db, initializeTestSchema } from "@/lib/db/test-client";
+
+// ============================================================================
+// ⚠️  INTEGRATION TEST - PGLITE DATABASE ⚠️
+// ============================================================================
+// This is an INTEGRATION TEST using PGlite (Postgres in WebAssembly).
+// PGlite runs in-process with zero setup - no Docker, no Supabase needed.
+//
+// SAFETY: PGlite uses in-memory database isolated per test run. Cannot affect
+// production data because it never connects to external databases.
+//
+// See GitHub Issue #39 for context on why we added PGlite.
+// ============================================================================
 
 /**
  * Integration Test Suite for Combined DORA Metrics API
@@ -10,16 +31,28 @@ import { deployments, pullRequests } from "@/lib/db/schema";
  * - Lead Time for Changes
  * - Change Failure Rate (CFR)
  * - Mean Time to Recovery (MTTR)
- *
- * Note: These are integration tests that require a test database.
  */
 
-const API_URL = "http://localhost:3000/api/metrics/dora";
+// Helper to create a NextRequest with query parameters
+function createRequest(params?: Record<string, string>): NextRequest {
+  const url = new URL("http://localhost:3000/api/metrics/dora");
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+  }
+  return new NextRequest(url);
+}
 
 describe("GET /api/metrics/dora", () => {
   const startDate = new Date("2025-01-06T00:00:00Z"); // Monday W02
   const endDate = new Date("2025-01-12T23:59:59Z"); // Sunday W02
   const testWeek = "2025-W02";
+
+  // Initialize PGlite database schema before all tests
+  beforeAll(async () => {
+    await initializeTestSchema();
+  });
 
   beforeEach(async () => {
     // Clean up test data
@@ -35,7 +68,8 @@ describe("GET /api/metrics/dora", () => {
 
   describe("Basic Functionality", () => {
     test("should return 200 and combined DORA metrics for current week", async () => {
-      const response = await fetch(API_URL);
+      const request = createRequest();
+      const response = await GET(request);
 
       expect(response.status).toBe(200);
 
@@ -71,7 +105,8 @@ describe("GET /api/metrics/dora", () => {
     });
 
     test("should return metrics for specific week", async () => {
-      const response = await fetch(`${API_URL}?week=${testWeek}`);
+      const request = createRequest({ week: testWeek });
+      const response = await GET(request);
 
       expect(response.status).toBe(200);
 
@@ -85,7 +120,8 @@ describe("GET /api/metrics/dora", () => {
     });
 
     test("should return zero counts when no data exists", async () => {
-      const response = await fetch(`${API_URL}?week=${testWeek}`);
+      const request = createRequest({ week: testWeek });
+      const response = await GET(request);
 
       expect(response.status).toBe(200);
 
@@ -139,7 +175,8 @@ describe("GET /api/metrics/dora", () => {
         });
       }
 
-      const response = await fetch(`${API_URL}?week=${testWeek}`);
+      const request = createRequest({ week: testWeek });
+      const response = await GET(request);
       const data = await response.json();
 
       // Check deployment frequency
@@ -180,9 +217,8 @@ describe("GET /api/metrics/dora", () => {
         relatedPRs: [],
       });
 
-      const response = await fetch(
-        `${API_URL}?week=${testWeek}&project=project-a`,
-      );
+      const request = createRequest({ week: testWeek, project: "project-a" });
+      const response = await GET(request);
       const data = await response.json();
 
       expect(data.project).toBe("project-a");
@@ -231,9 +267,8 @@ describe("GET /api/metrics/dora", () => {
         },
       ]);
 
-      const response = await fetch(
-        `${API_URL}?week=${testWeek}&allProjects=true`,
-      );
+      const request = createRequest({ week: testWeek, allProjects: "true" });
+      const response = await GET(request);
       const data = await response.json();
 
       expect(data).toHaveProperty("projects");
@@ -262,9 +297,8 @@ describe("GET /api/metrics/dora", () => {
         relatedPRs: [],
       });
 
-      const response = await fetch(
-        `${API_URL}?week=${testWeek}&allProjects=true`,
-      );
+      const request = createRequest({ week: testWeek, allProjects: "true" });
+      const response = await GET(request);
       const data = await response.json();
 
       const projectMetrics = data.projects["test-project"];
@@ -278,7 +312,8 @@ describe("GET /api/metrics/dora", () => {
 
   describe("Query Parameter Validation", () => {
     test("should return 400 for invalid week format", async () => {
-      const response = await fetch(`${API_URL}?week=invalid-week`);
+      const request = createRequest({ week: "invalid-week" });
+      const response = await GET(request);
 
       expect(response.status).toBe(400);
 
@@ -288,7 +323,8 @@ describe("GET /api/metrics/dora", () => {
     });
 
     test("should return 400 for malformed week identifier", async () => {
-      const response = await fetch(`${API_URL}?week=2025-W99`);
+      const request = createRequest({ week: "2025-W99" });
+      const response = await GET(request);
 
       expect(response.status).toBe(400);
 
@@ -300,7 +336,8 @@ describe("GET /api/metrics/dora", () => {
       const validWeeks = ["2025-W01", "2024-W52", "2025-W10"];
 
       for (const week of validWeeks) {
-        const response = await fetch(`${API_URL}?week=${week}`);
+        const request = createRequest({ week });
+        const response = await GET(request);
         expect(response.status).toBe(200);
       }
     });
@@ -314,7 +351,8 @@ describe("GET /api/metrics/dora", () => {
 
     test("should return consistent response structure even with errors", async () => {
       // Test with invalid week that passes format validation but causes calculation issues
-      const response = await fetch(`${API_URL}?week=2025-W01`);
+      const request = createRequest({ week: "2025-W01" });
+      const response = await GET(request);
 
       expect(response.status).toBe(200);
 
@@ -348,7 +386,8 @@ describe("GET /api/metrics/dora", () => {
       }
 
       const startTime = Date.now();
-      const response = await fetch(`${API_URL}?week=${testWeek}`);
+      const request = createRequest({ week: testWeek });
+      const response = await GET(request);
       const endTime = Date.now();
 
       expect(response.status).toBe(200);

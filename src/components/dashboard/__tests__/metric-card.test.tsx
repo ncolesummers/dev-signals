@@ -59,7 +59,9 @@ describe("MetricCard Component", () => {
     });
 
     test("should render N/A when value is undefined", () => {
-      render(<MetricCard {...defaultProps} value={undefined} />);
+      render(
+        <MetricCard {...defaultProps} value={undefined as unknown as null} />,
+      );
       expect(screen.getByText("N/A")).toBeInTheDocument();
     });
   });
